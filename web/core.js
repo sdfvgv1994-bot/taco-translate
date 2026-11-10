@@ -17,7 +17,17 @@
     { id: 'id', name: '印尼文', azure: 'id', mm: 'id', speech: 'id-ID' },
     { id: 'fr', name: '法文', azure: 'fr', mm: 'fr', speech: 'fr-FR' },
     { id: 'de', name: '德文', azure: 'de', mm: 'de', speech: 'de-DE' },
-    { id: 'es', name: '西班牙文', azure: 'es', mm: 'es', speech: 'es-ES' }
+    { id: 'es', name: '西班牙文', azure: 'es', mm: 'es', speech: 'es-ES' },
+    { id: 'zhs', name: '中文（簡體）', azure: 'zh-Hans', mm: 'zh-CN', speech: 'zh-CN' },
+    { id: 'yue', name: '粵語', azure: 'yue', mm: null, speech: 'zh-HK' },      // mm: null = MyMemory 不支援，只能用 Azure
+    { id: 'fil', name: '菲律賓文', azure: 'fil', mm: 'tl', speech: 'fil-PH' },
+    { id: 'my', name: '緬甸文', azure: 'my', mm: 'my', speech: 'my-MM' },
+    { id: 'ms', name: '馬來文', azure: 'ms', mm: 'ms', speech: 'ms-MY' },
+    { id: 'hi', name: '印地文', azure: 'hi', mm: 'hi', speech: 'hi-IN' },
+    { id: 'ar', name: '阿拉伯文', azure: 'ar', mm: 'ar', speech: 'ar-SA' },
+    { id: 'ru', name: '俄文', azure: 'ru', mm: 'ru', speech: 'ru-RU' },
+    { id: 'it', name: '義大利文', azure: 'it', mm: 'it', speech: 'it-IT' },
+    { id: 'pt', name: '葡萄牙文', azure: 'pt', mm: 'pt', speech: 'pt-BR' }
   ];
 
   function langBy(id) {
@@ -86,6 +96,9 @@
     if (!langBy(from) || !langBy(to)) return '語言設定怪怪的，請重新選一次語言。';
     if (from === to) return '兩邊選了一樣的語言，換一個才能翻。';
     if (from === 'zh' && hasBopomofo(text)) return '注音還沒選字，選好字就會翻。';
+    if (provider === 'mymemory' && (!langBy(from).mm || !langBy(to).mm)) {
+      return '「' + (!langBy(from).mm ? langBy(from).name : langBy(to).name) + '」要先到「設定」填 Azure 金鑰才能翻。';
+    }
     if (countChars(text) > MAX_LEN) return '太長了，一次最多 ' + MAX_LEN + ' 個字。';
     if (provider === 'mymemory' && byteLength(text) > MM_MAX_BYTES) {
       return 'MyMemory 一次只能翻很短的句子（中文大約 160 個字）。請縮短一點，或到「設定」填 Azure 金鑰。';
