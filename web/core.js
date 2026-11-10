@@ -77,13 +77,62 @@
     return {
       azureKey: typeof s.azureKey === 'string' ? s.azureKey.trim() : '',
       azureRegion: typeof s.azureRegion === 'string' ? s.azureRegion.trim().toLowerCase().replace(/\s+/g, '') : '',
+      provider: s.provider === 'mymemory' || s.provider === 'azure' ? s.provider : 'auto',
       from: from,
       to: to
     };
   }
 
+  /* 自動：有金鑰用 Azure，沒有用 MyMemory。選 Azure 但沒金鑰時，暫時退回 MyMemory（設定頁會提醒）。 */
   function pickProvider(settings) {
+    if (settings && settings.provider === 'mymemory') return 'mymemory';
     return settings && settings.azureKey ? 'azure' : 'mymemory';
+  }
+
+  /* 另一家；沒有金鑰就沒有 Azure 可比，回傳 '' */
+  function otherProvider(settings, provider) {
+    if (provider === 'azure') return 'mymemory';
+    return settings && settings.azureKey ? 'azure' : '';
+  }
+
+  /* ---------- 常用句（中文原句，點一下填進原文去翻） ---------- */
+  var PHRASES_MAX = 30, PHRASE_LEN = 100;
+  var DEFAULT_PHRASES = [
+    '請問這個地址怎麼走？',
+    '我到了，請問你在哪裡？',
+    '請到一樓大門口拿餐，謝謝。',
+    '我把餐放在門口了。',
+    '請問是幾樓？',
+    '請給我你的電話號碼，我打給你。',
+    '不好意思，我找不到這個地址。',
+    '請問這是你點的餐嗎？',
+    '請給我一點時間，我馬上到。',
+    '謝謝，祝你用餐愉快！'
+  ];
+
+  function cleanPhrases(list) {
+    if (!Array.isArray(list)) return DEFAULT_PHRASES.slice();
+    var out = [], seen = Object.create(null);
+    for (var i = 0; i < list.length && out.length < PHRASES_MAX; i++) {
+      var t = typeof list[i] === 'string' ? normalizeText(list[i]) : '';
+      if (!t || countChars(t) > PHRASE_LEN || seen[t]) continue;
+      seen[t] = true; out.push(t);
+    }
+    return out;
+  }
+
+  /* 加一句；回傳 { list, error }，error 有字就是沒加成 */
+  function addPhrase(list, text) {
+    var t = normalizeText(text);
+    if (!t) return { list: list, error: '先打一句話。' };
+    if (countChars(t) > PHRASE_LEN) return { list: list, error: '太長了，一句最多 ' + PHRASE_LEN + ' 個字。' };
+    if (list.indexOf(t) >= 0) return { list: list, error: '這句已經有了。' };
+    if (list.length >= PHRASES_MAX) return { list: list, error: '最多存 ' + PHRASES_MAX + ' 句，先刪掉一些。' };
+    return { list: [t].concat(list), error: '' };
+  }
+
+  function removePhrase(list, text) {
+    return list.filter(function (p) { return p !== text; });
   }
 
   function providerName(p) {
@@ -279,7 +328,8 @@
 
   var Core = {
     MAX_LEN: MAX_LEN, MM_MAX_BYTES: MM_MAX_BYTES, HISTORY_MAX: HISTORY_MAX, LANGS: LANGS,
-    langBy: langBy, normalizeText: normalizeText, countChars: countChars, byteLength: byteLength, hasBopomofo: hasBopomofo, keyProblem: keyProblem,
+    langBy: langBy, otherProvider: otherProvider, DEFAULT_PHRASES: DEFAULT_PHRASES, PHRASES_MAX: PHRASES_MAX,
+    cleanPhrases: cleanPhrases, addPhrase: addPhrase, removePhrase: removePhrase, normalizeText: normalizeText, countChars: countChars, byteLength: byteLength, hasBopomofo: hasBopomofo, keyProblem: keyProblem,
     cleanSettings: cleanSettings, pickProvider: pickProvider, providerName: providerName,
     checkInput: checkInput, buildRequest: buildRequest, parseResponse: parseResponse,
     decodeEntities: decodeEntities, cacheKey: cacheKey,

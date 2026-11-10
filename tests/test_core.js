@@ -49,9 +49,9 @@ test('normalizeText / countChars / byteLength', () => {
 });
 
 test('cleanSettings：壞資料變成預設值', () => {
-  assert.deepEqual(S(null), { azureKey: '', azureRegion: '', from: 'zh', to: 'en' });
+  assert.deepEqual(S(null), { azureKey: '', azureRegion: '', provider: 'auto', from: 'zh', to: 'en' });
   assert.deepEqual(S({ azureKey: '  abc ', azureRegion: ' East Asia ', from: 'ja', to: 'xx' }),
-    { azureKey: 'abc', azureRegion: 'eastasia', from: 'ja', to: 'en' });
+    { azureKey: 'abc', azureRegion: 'eastasia', provider: 'auto', from: 'ja', to: 'en' });
   assert.deepEqual(S({ azureKey: 123 }).azureKey, '');
 });
 
@@ -298,4 +298,37 @@ test('filterHistory：搜尋原文或譯文、不分大小寫、可以只看收�
   assert.deepEqual(Core.filterHistory(a, { q: ' 哪裡 ' }).map((e) => e.id), ['c']);
   assert.deepEqual(Core.filterHistory(a, { favOnly: true }).map((e) => e.id), ['b']);
   assert.deepEqual(Core.filterHistory(a, { q: 'hello', favOnly: true }), []);
+});
+
+test('翻譯來源選項：自動／固定 MyMemory／固定 Azure', () => {
+  assert.equal(S({}).provider, 'auto');
+  assert.equal(S({ provider: 'bogus' }).provider, 'auto');
+  assert.equal(S({ provider: 'azure' }).provider, 'azure');
+  assert.equal(Core.pickProvider(S({})), 'mymemory');
+  assert.equal(Core.pickProvider(S({ azureKey: 'k' })), 'azure');
+  assert.equal(Core.pickProvider(S({ azureKey: 'k', provider: 'mymemory' })), 'mymemory');
+  assert.equal(Core.pickProvider(S({ provider: 'azure' })), 'mymemory');   // 選 Azure 但沒金鑰：先退回 MyMemory
+  assert.equal(Core.pickProvider(S({ azureKey: 'k', provider: 'azure' })), 'azure');
+});
+
+test('另一家：有金鑰才有 Azure 可比', () => {
+  assert.equal(Core.otherProvider(S({}), 'mymemory'), '');
+  assert.equal(Core.otherProvider(S({ azureKey: 'k' }), 'mymemory'), 'azure');
+  assert.equal(Core.otherProvider(S({ azureKey: 'k' }), 'azure'), 'mymemory');
+});
+
+test('常用句：預設、新增、刪除、清理', () => {
+  assert.ok(Core.DEFAULT_PHRASES.length >= 8);
+  assert.deepEqual(Core.cleanPhrases(null), Core.DEFAULT_PHRASES);
+  assert.deepEqual(Core.cleanPhrases([]), []);
+  assert.deepEqual(Core.cleanPhrases(['你好', '你好', '', 5, ' 謝謝 ']), ['你好', '謝謝']);
+  let r = Core.addPhrase(['a'], '  新的  ');
+  assert.deepEqual(r, { list: ['新的', 'a'], error: '' });
+  assert.match(Core.addPhrase(['a'], 'a').error, /已經有/);
+  assert.match(Core.addPhrase(['a'], '   ').error, /先打/);
+  assert.match(Core.addPhrase([], 'x'.repeat(101)).error, /太長/);
+  const many = Array.from({ length: Core.PHRASES_MAX }, (_, i) => 'p' + i);
+  assert.match(Core.addPhrase(many, '新的').error, /最多/);
+  assert.deepEqual(Core.removePhrase(['a', 'b'], 'a'), ['b']);
+  for (const p of Core.DEFAULT_PHRASES) assert.equal(Core.addPhrase([], p).error, '');
 });
