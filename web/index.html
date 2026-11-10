@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.cognitive.microsofttranslator.com https://api.mymemory.translated.net; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#0F172A">
+<title>對譯</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+  <main class="views">
+
+    <!-- 翻譯 -->
+    <section id="viewTranslate" class="view view-translate">
+      <header class="top">
+        <h1>對譯</h1>
+        <span id="providerTag" class="tag"></span>
+      </header>
+
+      <div class="src">
+        <label class="lbl" for="srcText">原文</label>
+        <textarea id="srcText" maxlength="1000" rows="3" placeholder="在這裡打字，或按麥克風用講的" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+        <div class="row">
+          <div class="row-l">
+            <button id="btnClear" type="button" class="round line" aria-label="清除原文">
+              <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+            </button>
+            <span id="count" class="muted">0 字</span>
+          </div>
+          <button id="btnMic" type="button" class="mic" aria-label="按一下開始說話" aria-pressed="false">
+            <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="seam">
+        <select id="selFrom" class="pill" aria-label="原文語言"></select>
+        <button id="btnSwap" type="button" class="round swap" aria-label="對調兩種語言">
+          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4v16"/><path d="M4 8l4-4 4 4"/><path d="M16 20V4"/><path d="M12 16l4 4 4-4"/></svg>
+        </button>
+        <select id="selTo" class="pill" aria-label="譯文語言"></select>
+      </div>
+
+      <div class="dst">
+        <div class="lbl">譯文</div>
+        <p id="dstText" class="dst-text" aria-live="polite"></p>
+        <p id="status" class="status" role="status"></p>
+        <div class="acts">
+          <button id="btnSpeak" type="button" class="act" disabled>
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10v4h4l5 4V6L8 10H4z"/><path d="M17 9a4 4 0 0 1 0 6"/></svg>
+            <span>播放</span>
+          </button>
+          <button id="btnCopy" type="button" class="act" disabled>
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+            <span>複製</span>
+          </button>
+          <button id="btnFav" type="button" class="act" aria-pressed="false" disabled>
+            <svg aria-hidden="true" class="star" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l2.5 5.2 5.5.8-4 4 1 5.6-5-2.8-5 2.8 1-5.6-4-4 5.5-.8L12 4z"/></svg>
+            <span id="favLabel">收藏</span>
+          </button>
+          <button id="btnBig" type="button" class="act" disabled>
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/></svg>
+            <span>放大</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 紀錄 -->
+    <section id="viewHistory" class="view view-page" hidden>
+      <header class="top"><h1>紀錄</h1></header>
+      <div class="page-pad">
+        <label class="search">
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M16 16l4 4"/></svg>
+          <span class="sr">搜尋翻譯紀錄</span>
+          <input id="histQ" type="search" placeholder="搜尋翻譯紀錄" autocomplete="off">
+        </label>
+        <div class="chips" role="group" aria-label="篩選">
+          <button id="chipAll" type="button" class="chip" aria-pressed="true">全部</button>
+          <button id="chipFav" type="button" class="chip" aria-pressed="false">收藏</button>
+        </div>
+      </div>
+      <div id="histList" class="list"></div>
+    </section>
+
+    <!-- 設定 -->
+    <section id="viewSettings" class="view view-page" hidden>
+      <header class="top"><h1>設定</h1></header>
+      <div class="page-pad settings">
+        <div class="card">
+          <h2>翻譯來源</h2>
+          <p id="providerNow" class="p"></p>
+          <p class="p muted">沒填金鑰時用 MyMemory（免註冊，每天約 5,000 字元，比較不準）。填了 Azure 金鑰就改用 Azure（比較準，每月免費 200 萬字元）。</p>
+        </div>
+        <div class="card">
+          <h2>Azure 金鑰</h2>
+          <p class="p muted">金鑰只存在這支手機的瀏覽器裡，不會傳到別的地方，也不會寫進程式。</p>
+          <label class="field">金鑰（Key）
+            <input id="azKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="200">
+          </label>
+          <label class="field">地區（Location/Region，例如 eastasia）
+            <input id="azRegion" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="40">
+          </label>
+          <div class="btns">
+            <button id="btnSave" type="button" class="btn primary">儲存</button>
+            <button id="btnTest" type="button" class="btn">測試連線</button>
+            <button id="btnForget" type="button" class="btn">移除金鑰</button>
+          </div>
+          <p id="setMsg" class="p" role="status"></p>
+        </div>
+        <div class="card">
+          <h2>紀錄</h2>
+          <p id="histInfo" class="p muted"></p>
+          <div class="btns">
+            <button id="btnClearHist" type="button" class="btn">清除紀錄（收藏的會留著）</button>
+          </div>
+        </div>
+        <p id="speechInfo" class="p muted"></p>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="nav" aria-label="主要功能">
+    <button type="button" class="nav-btn" data-view="viewTranslate" aria-current="page">
+      <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14"/><path d="M12 6v13"/><path d="M9 19h6"/></svg>
+      <span>翻譯</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="viewHistory">
+      <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+      <span>紀錄</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="viewSettings">
+      <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h10"/><path d="M18 7h2"/><circle cx="16" cy="7" r="2"/><path d="M4 17h2"/><path d="M10 17h10"/><circle cx="8" cy="17" r="2"/></svg>
+      <span>設定</span>
+    </button>
+  </nav>
+
+  <button id="big" type="button" class="big" hidden aria-label="關閉放大畫面">
+    <span id="bigText" class="big-text"></span>
+    <span class="big-hint">點一下關閉</span>
+  </button>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+</div>
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
