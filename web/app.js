@@ -177,7 +177,7 @@
       };
       rec.onerror = function (ev) {
         var m = { 'not-allowed': '麥克風沒有開放權限，到瀏覽器設定允許後再試', 'service-not-allowed': '麥克風沒有開放權限，到瀏覽器設定允許後再試',
-          'no-speech': '沒聽到聲音，再按一次試試', 'audio-capture': '找不到麥克風', 'network': '語音辨識需要網路' }[ev.error];
+          'no-speech': '沒聽到聲音，再按一次試試', 'audio-capture': '找不到麥克風', 'network': '語音辨識需要網路', 'language-not-supported': '這支手機的語音輸入不支援這個語言' }[ev.error];
         if (ev.error !== 'aborted') toast(m || '語音輸入失敗，再試一次');
       };
       rec.onend = function () {
@@ -197,6 +197,7 @@
       window.speechSynthesis.cancel();
       var u = new SpeechSynthesisUtterance(current.dst);
       u.lang = Core.langBy(current.to).speech;
+      u.onerror = function (ev) { if (ev && ev.error !== 'canceled' && ev.error !== 'interrupted') toast('這支手機念不出這個語言'); };
       window.speechSynthesis.speak(u);
     } catch (e) { toast('朗讀失敗'); }
   }
@@ -240,7 +241,7 @@
   /* ---------- 紀錄 ---------- */
   var STAR = '<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l2.5 5.2 5.5.8-4 4 1 5.6-5-2.8-5 2.8 1-5.6-4-4 5.5-.8L12 4z"/></svg>';
   var TRASH = '<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14"/><path d="M10 7V4h4v3"/><path d="M7 7l1 13h8l1-13"/></svg>';
-  function div(cls, text) { var d = document.createElement('span'); d.className = cls; d.textContent = text; return d; }
+  function div(cls, text) { var d = document.createElement('span'); d.className = cls; d.dir = 'auto'; d.textContent = text; return d; }
   function renderHistory() {
     var shown = Core.filterHistory(history, { q: el.q.value, favOnly: favOnly });
     el.chipAll.setAttribute('aria-pressed', favOnly ? 'false' : 'true');
@@ -320,6 +321,7 @@
     if (bad) { setMsg(bad, true); return; }
     settings = next; cache.clear(); armedForget = false;
     var ok = saveSettings(); fillForm(); renderSettings();
+    if (el.src.value) translateNow();                      // 換了翻譯來源，畫面上的結果跟著重翻
     setMsg(ok ? (settings.azureKey ? '已儲存，之後用 Azure 翻譯。' : '已儲存。沒有金鑰，用 MyMemory 翻譯。') : '存不進去，手機瀏覽器可能關掉了儲存功能。', !ok);
   }
   function testForm() {
@@ -339,6 +341,7 @@
     armedForget = false;
     settings.azureKey = ''; settings.azureRegion = ''; cache.clear();
     saveSettings(); fillForm(); renderSettings(); setMsg('金鑰已從這支手機移除，改用 MyMemory。');
+    if (el.src.value) translateNow();
   }
   function clearHist() {
     if (!armedClear) { armedClear = true; renderSettings(); return; }

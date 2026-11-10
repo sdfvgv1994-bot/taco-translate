@@ -121,6 +121,7 @@
         options: { method: 'POST', headers: headers, body: JSON.stringify([{ Text: text }]) }
       };
     }
+    if (!f.mm || !t.mm) throw new Error('這個語言 MyMemory 不支援，請到「設定」填 Azure 金鑰。');
     return {
       url: 'https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text) +
         '&langpair=' + encodeURIComponent(f.mm + '|' + t.mm),

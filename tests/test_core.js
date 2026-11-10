@@ -29,6 +29,7 @@ test('粵語：MyMemory 擋下並提示填 Azure；Azure 可以送', () => {
 });
 
 test('簡體、新語言的請求代碼', () => {
+  assert.throws(() => Core.buildRequest('mymemory', 'x', 'zh', 'yue', {}), /Azure/);
   const a = Core.buildRequest('azure', '你好', 'zh', 'zhs', { azureKey: 'k' });
   assert.match(a.url, /from=zh-Hant&to=zh-Hans/);
   const m = Core.buildRequest('mymemory', 'hi', 'en', 'fil', {});
