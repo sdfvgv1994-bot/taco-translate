@@ -26,7 +26,10 @@
   }
 
   function normalizeText(s) {
-    return String(s == null ? '' : s).replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ').trim();
+    return String(s == null ? '' : s)
+      .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')            // 落單的半個 emoji 丟掉，不然組網址會出錯
+      .replace(/(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '$1')
+      .replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ').trim();
   }
 
   function countChars(s) {
@@ -45,13 +48,27 @@
     return n;
   }
 
+  /* 注音還沒選字（ㄅ～ㄩ）：這時候翻出來一定是錯的，先不要送 */
+  function hasBopomofo(s) {
+    return /[\u3105-\u312F]/.test(String(s == null ? '' : s));
+  }
+
+  /* 金鑰只能是一般英數符號；貼到中文或全形字會讓請求整個送不出去 */
+  function keyProblem(key) {
+    if (!key) return '';
+    return /^[\x21-\x7e]+$/.test(key) ? '' : '金鑰裡有中文、全形字或空白，請重新從 Azure 複製一次。';
+  }
+
   function cleanSettings(s) {
     s = s && typeof s === 'object' ? s : {};
+    var from = langBy(s.from) ? s.from : 'zh';
+    var to = langBy(s.to) ? s.to : 'en';
+    if (from === to) to = from === 'en' ? 'zh' : 'en';
     return {
       azureKey: typeof s.azureKey === 'string' ? s.azureKey.trim() : '',
       azureRegion: typeof s.azureRegion === 'string' ? s.azureRegion.trim().toLowerCase().replace(/\s+/g, '') : '',
-      from: langBy(s.from) ? s.from : 'zh',
-      to: langBy(s.to) ? s.to : 'en'
+      from: from,
+      to: to
     };
   }
 
@@ -68,6 +85,7 @@
     if (!text) return '';
     if (!langBy(from) || !langBy(to)) return '語言設定怪怪的，請重新選一次語言。';
     if (from === to) return '兩邊選了一樣的語言，換一個才能翻。';
+    if (from === 'zh' && hasBopomofo(text)) return '注音還沒選字，選好字就會翻。';
     if (countChars(text) > MAX_LEN) return '太長了，一次最多 ' + MAX_LEN + ' 個字。';
     if (provider === 'mymemory' && byteLength(text) > MM_MAX_BYTES) {
       return 'MyMemory 一次只能翻很短的句子（中文大約 160 個字）。請縮短一點，或到「設定」填 Azure 金鑰。';
@@ -123,8 +141,9 @@
       if (status === 401 || (code >= 401000 && code < 402000)) {
         throw new Error('Azure 金鑰不對，或「地區」沒填對。請到「設定」檢查。');
       }
+      if (code === 403001) throw new Error('Azure 這個月的免費額度用完了，下個月會恢復。');
       if (status === 403 || (code >= 403000 && code < 404000)) {
-        throw new Error('Azure 這個月的免費額度用完了，下個月會恢復。');
+        throw new Error('Azure 不允許這個操作（代碼 ' + (code || status) + '），請到「設定」檢查金鑰和地區。');
       }
       if (status === 429 || (code >= 429000 && code < 430000)) {
         throw new Error('翻太快了，等幾秒再試。');
@@ -153,7 +172,7 @@
 
   function cleanHistory(list) {
     if (!Array.isArray(list)) return [];
-    var out = [], seen = {};
+    var out = [], seen = Object.create(null);
     for (var i = 0; i < list.length; i++) {
       var e = list[i];
       if (!e || typeof e !== 'object') continue;
@@ -169,17 +188,18 @@
   function trimHistory(list, max) {
     max = max || HISTORY_MAX;
     var out = list.slice();
-    for (var i = out.length - 1; i >= 0 && out.length > max; i--) {
-      if (!out[i].fav) out.splice(i, 1);     // 從最舊的開始丟，收藏的不丟
+    for (var i = out.length - 1; i >= 1 && out.length > max; i--) {
+      if (!out[i].fav) out.splice(i, 1);     // 從最舊的開始丟；收藏的不丟，最上面剛加的那筆也不丟
     }
     return out;
   }
 
   /*
-   * 加一筆到最上面。回傳 { list, id }。
-   * - 同語言、同原文已經有：更新譯文、搬到最上面，收藏狀態留著。
-   * - replaceId：上一筆是「打字打到一半」自動存的，而且新原文是它的延伸（或它是新原文的延伸），就直接改那一筆，
-   *   不要每停一下就多一筆。收藏過的不會被改。
+   * 加一筆到最上面。回傳 { list, id, dst, draft }。
+   * - 同語言、同原文已經有：搬到最上面，收藏狀態留著；收藏過的連譯文也留著（那是使用者挑過的）。
+   *   這種不算草稿（draft: false），之後繼續打字不會去改它。
+   * - replaceId：上一筆是「打字打到一半」自動存的，而且新原文是它的延伸，就直接改那一筆，
+   *   不要每停一下就多一筆。只認「變長」，刪字縮短一律另存，寧可多一筆也不吃掉翻好的句子。收藏過的不會被改。
    */
   function addHistory(list, entry, opts) {
     opts = opts || {};
@@ -187,10 +207,12 @@
     for (i = 0; i < out.length; i++) {
       if (out[i].from === entry.from && out[i].to === entry.to && out[i].src === entry.src) {
         var same = out.splice(i, 1)[0];
-        var kept = { id: same.id, from: same.from, to: same.to, src: same.src, dst: entry.dst, fav: same.fav, at: entry.at };
-        if (opts.replaceId && opts.replaceId !== same.id) out = dropDraft(out, opts.replaceId, entry);
+        var kept = { id: same.id, from: same.from, to: same.to, src: same.src, dst: same.fav ? same.dst : entry.dst, fav: same.fav, at: entry.at };
+        if (opts.replaceId && opts.replaceId !== same.id) {
+          out = out.filter(function (d) { return !(d.id === opts.replaceId && isDraftOf(d, entry)); });
+        }
         out.unshift(kept);
-        return { list: trimHistory(out, opts.max), id: kept.id };
+        return { list: trimHistory(out, opts.max), id: kept.id, dst: kept.dst, draft: false };
       }
     }
     if (opts.replaceId) {
@@ -199,21 +221,17 @@
         if (d.id === opts.replaceId && isDraftOf(d, entry)) {
           out.splice(i, 1);
           out.unshift({ id: d.id, from: entry.from, to: entry.to, src: entry.src, dst: entry.dst, fav: false, at: entry.at });
-          return { list: trimHistory(out, opts.max), id: d.id };
+          return { list: trimHistory(out, opts.max), id: d.id, dst: entry.dst, draft: true };
         }
       }
     }
     out.unshift({ id: entry.id, from: entry.from, to: entry.to, src: entry.src, dst: entry.dst, fav: false, at: entry.at });
-    return { list: trimHistory(out, opts.max), id: entry.id };
+    return { list: trimHistory(out, opts.max), id: entry.id, dst: entry.dst, draft: true };
   }
 
   function isDraftOf(d, entry) {
     return !d.fav && d.from === entry.from && d.to === entry.to &&
-      (entry.src.indexOf(d.src) === 0 || d.src.indexOf(entry.src) === 0);
-  }
-
-  function dropDraft(list, replaceId, entry) {
-    return list.filter(function (d) { return !(d.id === replaceId && isDraftOf(d, entry)); });
+      entry.src.length > d.src.length && entry.src.indexOf(d.src) === 0;
   }
 
   function toggleFav(list, id) {
@@ -247,7 +265,7 @@
 
   var Core = {
     MAX_LEN: MAX_LEN, MM_MAX_BYTES: MM_MAX_BYTES, HISTORY_MAX: HISTORY_MAX, LANGS: LANGS,
-    langBy: langBy, normalizeText: normalizeText, countChars: countChars, byteLength: byteLength,
+    langBy: langBy, normalizeText: normalizeText, countChars: countChars, byteLength: byteLength, hasBopomofo: hasBopomofo, keyProblem: keyProblem,
     cleanSettings: cleanSettings, pickProvider: pickProvider, providerName: providerName,
     checkInput: checkInput, buildRequest: buildRequest, parseResponse: parseResponse,
     decodeEntities: decodeEntities, cacheKey: cacheKey,

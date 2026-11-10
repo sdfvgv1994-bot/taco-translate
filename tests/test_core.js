@@ -149,8 +149,11 @@ test('addHistory：同一句再翻一次，搬到最上面、收藏留著、不�
   assert.deepEqual(r.list.map((e) => e.id), ['b', 'a']);
   assert.equal(r.id, 'b');
   assert.equal(r.list[0].fav, true);
-  assert.equal(r.list[0].dst, 'Thank you');
+  assert.equal(r.list[0].dst, 'Thanks', '收藏過的譯文留著');
   assert.equal(r.list[0].at, 9);
+  const r2 = Core.addHistory(a, E('new', '你好', 'Hi', { at: 9 }));
+  assert.equal(r2.list[0].dst, 'Hi', '沒收藏的更新成新譯文');
+  assert.equal(r2.list.length, 2);
 });
 
 test('addHistory：同一句但語言不同算不同筆', () => {
@@ -166,10 +169,63 @@ test('addHistory：打字打到一半的草稿會被改掉，不會一直多', (
   }
   assert.equal(list.length, 1);
   assert.equal(list[0].src, '請問最近的捷運站怎麼走？');
-  // 倒退刪字也算同一筆
-  r = Core.addHistory(list, E('x', '請問最近的', 'again'), { replaceId: id });
-  assert.equal(r.list.length, 1);
-  assert.equal(r.list[0].src, '請問最近的');
+  assert.equal(r.draft, true);
+});
+
+test('addHistory：刪字縮短不會吃掉翻好的那一句（小修 #2）', () => {
+  const r1 = Core.addHistory([], E('a', '我要一杯咖啡', 'A coffee please'));
+  const r2 = Core.addHistory(r1.list, E('b', '我要', 'I want'), { replaceId: r1.id });
+  const r3 = Core.addHistory(r2.list, E('c', '我要一杯茶', 'A tea please'), { replaceId: r2.id });
+  assert.deepEqual(r3.list.map((e) => e.src), ['我要一杯茶', '我要一杯咖啡']);
+});
+
+test('addHistory：打到跟舊紀錄同一句，不會把舊紀錄當草稿改掉（小修 #2）', () => {
+  const old = [E('old', '你好嗎', 'How are you')];
+  const r1 = Core.addHistory(old, E('n1', '你好嗎', 'How are you?'));
+  assert.equal(r1.draft, false);
+  const r2 = Core.addHistory(r1.list, E('n2', '你好嗎朋友', 'How are you friend'), { replaceId: r1.draft ? r1.id : null });
+  assert.deepEqual(r2.list.map((e) => e.src), ['你好嗎朋友', '你好嗎']);
+  const r3 = Core.addHistory(r2.list, E('n3', '你好嗎', 'again'), { replaceId: r2.id });
+  assert.deepEqual(r3.list.map((e) => e.src), ['你好嗎', '你好嗎朋友']);
+});
+
+test('addHistory：收藏過的譯文不會被新的翻譯蓋掉（小修 #6）', () => {
+  const list = [E('a', '你好', 'Hello (Azure)', { fav: true })];
+  const r = Core.addHistory(list, E('n', '你好', 'Hi (MyMemory)'));
+  assert.equal(r.list[0].dst, 'Hello (Azure)');
+  assert.equal(r.dst, 'Hello (Azure)');
+});
+
+test('addHistory：收藏滿了，新翻的那筆還是留得住（小修 #5）', () => {
+  const favs = [1, 2, 3].map((i) => E('f' + i, 'x' + i, 'y', { fav: true }));
+  const r = Core.addHistory(favs, E('z', '新的', 'new'), { max: 3 });
+  assert.equal(r.list[0].id, 'z');
+  assert.equal(r.list.length, 4);
+});
+
+test('注音還沒選字先不翻（小修 #1）', () => {
+  assert.equal(Core.hasBopomofo('你好ㄇ'), true);
+  assert.equal(Core.hasBopomofo('你好嗎 hello'), false);
+  assert.match(Core.checkInput('azure', '你好ㄇ', 'zh', 'en'), /注音/);
+  assert.equal(Core.checkInput('azure', 'ㄅㄆㄇ', 'ja', 'zh'), '', '原文不是中文就不擋');
+});
+
+test('keyProblem / 壞設定（小修 #8、#12）', () => {
+  assert.equal(Core.keyProblem(''), '');
+  assert.equal(Core.keyProblem('abcDEF0123'), '');
+  assert.match(Core.keyProblem('金鑰abc'), /重新/);
+  assert.match(Core.keyProblem('abc def'), /重新/);
+  assert.deepEqual([S({ from: 'en', to: 'en' }).from, S({ from: 'en', to: 'en' }).to], ['en', 'zh']);
+  assert.deepEqual([S({ from: 'ja', to: 'ja' }).from, S({ from: 'ja', to: 'ja' }).to], ['ja', 'en']);
+  assert.equal(Core.normalizeText('好\uD83D'), '好');
+  assert.equal(Core.normalizeText('\uDE00好'), '好');
+  assert.equal(Core.normalizeText('好😀'), '好😀');
+  assert.equal(Core.cleanHistory([E('constructor', '你好', 'Hello'), E('__proto__', '謝謝', 'Thanks')]).length, 2);
+});
+
+test('Azure 403：只有 403001 才說額度用完（小修 #7）', () => {
+  assert.throws(() => Core.parseResponse('azure', 403, { error: { code: 403000 } }), /不允許/);
+  assert.throws(() => Core.parseResponse('azure', 403, { error: { code: 403001 } }), /額度用完/);
 });
 
 test('addHistory：換了一句不相干的，草稿留著、另外加一筆', () => {

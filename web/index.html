@@ -2,12 +2,13 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.cognitive.microsofttranslator.com https://api.mymemory.translated.net; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="theme-color" content="#0F172A">
 <title>對譯</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -95,11 +96,11 @@
         <div class="card">
           <h2>翻譯來源</h2>
           <p id="providerNow" class="p"></p>
-          <p class="p muted">沒填金鑰時用 MyMemory（免註冊，每天約 5,000 字元，比較不準）。填了 Azure 金鑰就改用 Azure（比較準，每月免費 200 萬字元）。</p>
+          <p class="p muted">沒填金鑰時用 MyMemory（免註冊，每天約 5,000 字元，比較不準）。填了 Azure 金鑰就改用 Azure（比較準，每月免費 200 萬字元）。要翻的句子會送到這些服務，個資、密碼不要拿來翻。</p>
         </div>
         <div class="card">
           <h2>Azure 金鑰</h2>
-          <p class="p muted">金鑰只存在這支手機的瀏覽器裡，不會傳到別的地方，也不會寫進程式。</p>
+          <p class="p muted">金鑰只存在這支手機的瀏覽器裡，只會送給 Azure，不會寫進程式。同一個網址底下你自己的其他網頁（遊戲、歌單）技術上也讀得到，所以 Azure 請用免費的 F0 方案。</p>
           <label class="field">金鑰（Key）
             <input id="azKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="200">
           </label>

@@ -20,7 +20,7 @@
   var seq = 0, aborter = null, timer = null;
   var current = null;        // 畫面上這句譯文對應的紀錄 { id, from, to, src, dst }
   var draftId = null;        // 打字途中自動存的那一筆
-  var favOnly = false, armedId = null, armedClear = false;
+  var favOnly = false, armedId = null, armedClear = false, armedForget = false;
   var toastTimer = null;
 
   var el = {
@@ -30,7 +30,7 @@
     bigBox: $('big'), bigText: $('bigText'), toast: $('toast'),
     list: $('histList'), q: $('histQ'), chipAll: $('chipAll'), chipFav: $('chipFav'),
     azKey: $('azKey'), azRegion: $('azRegion'), setMsg: $('setMsg'), providerNow: $('providerNow'),
-    histInfo: $('histInfo'), clearHist: $('btnClearHist'), speechInfo: $('speechInfo')
+    histInfo: $('histInfo'), clearHist: $('btnClearHist'), forget: $('btnForget'), speechInfo: $('speechInfo')
   };
 
   /* ---------- 小工具 ---------- */
@@ -44,7 +44,7 @@
     el.status.className = 'status' + (isErr ? ' err' : '');
   }
   function saveHistory() {
-    if (!save(K_HIST, history)) toast('手機空間不夠，這筆紀錄沒存到');
+    if (!save(K_HIST, history)) toast('紀錄存不進去（瀏覽器的儲存空間滿了或被關掉）');
   }
   function saveSettings() { return save(K_SET, settings); }
   function newId() { return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8); }
@@ -65,10 +65,11 @@
       else { f = settings.to; el.from.value = f; }
     }
     settings.from = f; settings.to = t; saveSettings();
-    draftId = null;
+    draftId = null; stopMic();
     translateNow();
   }
   function swap() {
+    stopMic();
     var oldDst = current && current.src === Core.normalizeText(el.src.value) ? current.dst : '';
     var f = settings.from; settings.from = settings.to; settings.to = f;
     el.from.value = settings.from; el.to.value = settings.to; saveSettings();
@@ -140,9 +141,9 @@
 
     function done(out) {
       var r = Core.addHistory(history, { id: newId(), from: from, to: to, src: text, dst: out, at: Date.now() }, { replaceId: draftId });
-      history = r.list; draftId = r.id; saveHistory();
+      history = r.list; draftId = r.draft ? r.id : null; saveHistory();
       setStatus('');
-      showResult({ id: r.id, from: from, to: to, src: text, dst: out });
+      showResult({ id: r.id, from: from, to: to, src: text, dst: r.dst });
     }
   }
 
@@ -154,11 +155,14 @@
     el.mic.setAttribute('aria-pressed', on ? 'true' : 'false');
     el.mic.setAttribute('aria-label', on ? '正在收音，按一下停止' : '按一下開始說話');
   }
+  function stopMic() {
+    if (listening && rec) { try { rec.stop(); } catch (e) {} }
+  }
   function toggleMic() {
     if (!SR) { toast('這個瀏覽器不支援語音輸入，請改用 Chrome 開'); return; }
-    if (listening && rec) { try { rec.stop(); } catch (e) {} return; }
+    if (listening && rec) { stopMic(); return; }
     var base = el.src.value ? el.src.value.replace(/\s+$/, '') + ' ' : '';
-    var gotFinal = false;
+    var before = el.src.value;
     try {
       rec = new SR();
       rec.lang = Core.langBy(settings.from).speech;
@@ -167,7 +171,6 @@
         var s = '';
         for (var i = 0; i < ev.results.length; i++) {
           s += ev.results[i][0].transcript;
-          if (ev.results[i].isFinal) gotFinal = true;
         }
         el.src.value = (base + s).slice(0, Core.MAX_LEN);
         updateCount();
@@ -177,13 +180,18 @@
           'no-speech': '沒聽到聲音，再按一次試試', 'audio-capture': '找不到麥克風', 'network': '語音辨識需要網路' }[ev.error];
         if (ev.error !== 'aborted') toast(m || '語音輸入失敗，再試一次');
       };
-      rec.onend = function () { setMic(false); rec = null; if (gotFinal) translateNow(); };
+      rec.onend = function () {
+        setMic(false); rec = null; el.src.readOnly = false;
+        if (el.src.value !== before) translateNow();      // 只收到臨時結果也照翻
+      };
       rec.start();
+      el.src.readOnly = true;                             // 收音時先鎖住打字，免得手打的字被語音蓋掉
       setMic(true);
-    } catch (e) { setMic(false); rec = null; toast('語音輸入開不起來，再試一次'); }
+    } catch (e) { setMic(false); rec = null; el.src.readOnly = false; toast('語音輸入開不起來，再試一次'); }
   }
   function speak() {
     if (!current) return;
+    draftId = null;                                       // 拿去用過就算定稿，之後打字不再改這筆
     if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') { toast('這個瀏覽器不支援朗讀'); return; }
     try {
       window.speechSynthesis.cancel();
@@ -194,6 +202,7 @@
   }
   function copy() {
     if (!current) return;
+    draftId = null;
     var text = current.dst;
     function fallback() {
       var ta = document.createElement('textarea');
@@ -217,9 +226,13 @@
     history = Core.toggleFav(history, current.id);
     if (draftId === current.id) draftId = null;     // 收藏過就不再當草稿改掉
     saveHistory(); showResult(current);
+    if (!Core.findItem(history, current.id)) toast('收藏不進去，紀錄已經滿了');
   }
   function openBig() {
     if (!current) return;
+    draftId = null;
+    var n = Core.countChars(current.dst);
+    el.bigText.className = 'big-text' + (n > 120 ? ' xlong' : n > 40 ? ' long' : '');
     el.bigText.textContent = current.dst; el.bigBox.hidden = false; el.bigBox.focus();
   }
   function closeBig() { el.bigBox.hidden = true; el.big.focus(); }
@@ -289,7 +302,8 @@
     var p = Core.pickProvider(settings);
     el.tag.textContent = Core.providerName(p);
     el.providerNow.textContent = '目前使用：' + Core.providerName(p) + (p === 'azure' ? '（已填金鑰）' : '（還沒填 Azure 金鑰）');
-    el.azKey.value = settings.azureKey; el.azRegion.value = settings.azureRegion;
+    el.forget.textContent = armedForget ? '再按一次確定移除' : '移除金鑰';
+    el.forget.className = 'btn' + (armedForget ? ' armed' : '');
     var favs = history.filter(function (e) { return e.fav; }).length;
     el.histInfo.textContent = '共 ' + history.length + ' 筆紀錄，其中 ' + favs + ' 筆收藏。最多留 ' + Core.HISTORY_MAX + ' 筆，滿了會從最舊、沒收藏的開始丟。';
     el.clearHist.textContent = armedClear ? '再按一次確定清除' : '清除紀錄（收藏的會留著）';
@@ -297,17 +311,21 @@
     el.speechInfo.textContent = '語音輸入：' + (SR ? '這個瀏覽器可以用' : '這個瀏覽器不支援，請改用 Chrome') +
       '。朗讀：' + ('speechSynthesis' in window ? '可以用' : '不支援') + '。';
   }
+  function fillForm() { el.azKey.value = settings.azureKey; el.azRegion.value = settings.azureRegion; }
   function formSettings() {
     return Core.cleanSettings({ azureKey: el.azKey.value, azureRegion: el.azRegion.value, from: settings.from, to: settings.to });
   }
   function saveForm() {
-    settings = formSettings(); cache.clear();
-    var ok = saveSettings(); renderSettings();
+    var next = formSettings(), bad = Core.keyProblem(next.azureKey);
+    if (bad) { setMsg(bad, true); return; }
+    settings = next; cache.clear(); armedForget = false;
+    var ok = saveSettings(); fillForm(); renderSettings();
     setMsg(ok ? (settings.azureKey ? '已儲存，之後用 Azure 翻譯。' : '已儲存。沒有金鑰，用 MyMemory 翻譯。') : '存不進去，手機瀏覽器可能關掉了儲存功能。', !ok);
   }
   function testForm() {
     var s = formSettings();
     if (!s.azureKey) { setMsg('先貼上金鑰再測試。', true); return; }
+    if (Core.keyProblem(s.azureKey)) { setMsg(Core.keyProblem(s.azureKey), true); return; }
     if (navigator.onLine === false) { setMsg('現在沒有網路。', true); return; }
     setMsg('測試中…');
     var req = Core.buildRequest('azure', '你好', 'zh', 'en', s), status = 0;
@@ -316,8 +334,11 @@
       .catch(function (e) { setMsg(e && e.name === 'TypeError' ? '連不上 Azure，檢查網路或地區有沒有填對。' : (e && e.message) || '測試失敗。', true); });
   }
   function forgetKey() {
+    if (!settings.azureKey && !el.azKey.value) { setMsg('目前沒有存金鑰。'); return; }
+    if (!armedForget) { armedForget = true; renderSettings(); return; }
+    armedForget = false;
     settings.azureKey = ''; settings.azureRegion = ''; cache.clear();
-    saveSettings(); renderSettings(); setMsg('金鑰已從這支手機移除，改用 MyMemory。');
+    saveSettings(); fillForm(); renderSettings(); setMsg('金鑰已從這支手機移除，改用 MyMemory。');
   }
   function clearHist() {
     if (!armedClear) { armedClear = true; renderSettings(); return; }
@@ -332,9 +353,14 @@
     Array.prototype.forEach.call(document.querySelectorAll('.nav-btn'), function (b) {
       if (b.dataset.view === id) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     });
-    armedId = null; armedClear = false;
+    armedId = null; armedClear = false; armedForget = false;
+    if (id !== 'viewTranslate') stopMic();
     if (id === 'viewHistory') renderHistory();
-    if (id === 'viewSettings') { setMsg(''); renderSettings(); }
+    if (id === 'viewSettings') {
+      var dirty = el.azKey.value.trim() !== settings.azureKey || Core.cleanSettings({ azureRegion: el.azRegion.value }).azureRegion !== settings.azureRegion;
+      setMsg(dirty ? '金鑰或地區改過但還沒存，記得按「儲存」。' : '', dirty);
+      renderSettings();
+    }
   }
 
   /* ---------- 開機 ---------- */
@@ -356,11 +382,14 @@
   el.chipFav.addEventListener('click', function () { favOnly = true; armedId = null; renderHistory(); });
   $('btnSave').addEventListener('click', saveForm);
   $('btnTest').addEventListener('click', testForm);
-  $('btnForget').addEventListener('click', forgetKey);
+  el.forget.addEventListener('click', forgetKey);
   el.clearHist.addEventListener('click', clearHist);
   Array.prototype.forEach.call(document.querySelectorAll('.nav-btn'), function (b) {
     b.addEventListener('click', function () { showView(b.dataset.view); });
   });
   window.addEventListener('online', function () { if (el.src.value && !current) translateNow(); });
-  updateCount(); showResult(null); renderSettings();
+  updateCount(); showResult(null); fillForm(); renderSettings();
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register('sw.js').catch(function () {});   // 讓沒網路時也打得開
+  }
 })();
