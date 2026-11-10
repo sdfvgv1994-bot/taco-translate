@@ -244,13 +244,16 @@
   function closeOverlay(fromPop) {
     if (!overlay) return;
     var name = overlay; overlay = null;
+    cmpSeq++;                                              // 還在跑的檢查請求不要再更新畫面、也不要再打下一個
+    if (cmpAbort) { try { cmpAbort.abort(); } catch (e) {} cmpAbort = null; }
     el.bigBox.hidden = true; el.cmpBox.hidden = true;
     if (!fromPop && overlayPushed) { try { window.history.back(); } catch (e) {} }
     overlayPushed = false;
-    (name === 'big' ? el.big : el.check).focus();
+    var back = name === 'big' ? el.big : el.check;
+    if (!back.disabled) back.focus();
   }
   function openBig() {
-    if (!current) return;
+    if (!current || overlay) return;
     draftId = null;
     var n = Core.countChars(current.dst);
     el.bigText.className = 'big-text' + (n > 120 ? ' xlong' : n > 40 ? ' long' : '');
@@ -259,25 +262,40 @@
   function closeBig() { closeOverlay(false); }
 
   /* ---------- 檢查翻譯：翻回原文、換另一家再翻 ---------- */
-  var cmpSeq = 0;
-  function translateVia(provider, text, from, to) {
+  var cmpSeq = 0, cmpAbort = null, inflight = new Map();
+  function translateVia(provider, text, from, to, signal) {
     var bad = Core.checkInput(provider, text, from, to);
     if (bad) return Promise.reject(new Error(bad));
     var key = Core.cacheKey(provider, from, to, text);
     if (cache.has(key)) return Promise.resolve(cache.get(key));
     if (navigator.onLine === false) return Promise.reject(new Error('現在沒有網路。'));
+    if (inflight.has(key)) return inflight.get(key);          // 同一句同時只打一次，連點不會多耗額度
     var req;
     try { req = Core.buildRequest(provider, text, from, to, settings); } catch (e) { return Promise.reject(e); }
+    if (signal) req.options.signal = signal;
     var status = 0;
-    return fetch(req.url, req.options).then(function (res) {
+    var pr = fetch(req.url, req.options).then(function (res) {
       status = res.status; return res.json().catch(function () { return null; });
     }).then(function (json) {
       var out = Core.parseResponse(provider, status, json);
       cache.set(key, out);
+      if (cache.size > 300) cache.delete(cache.keys().next().value);
+      inflight.delete(key);
       return out;
-    });
+    }, function (e) { inflight.delete(key); throw e; });
+    inflight.set(key, pr);
+    return pr;
   }
-  function errText(e) { return e && e.name === 'TypeError' ? '連不上翻譯服務。' : (e && e.message) || '失敗了。'; }
+  function errText(e, provider) {
+    var m = e && e.name === 'TypeError' ? '連不上翻譯服務。' : (e && e.message) || '失敗了。';
+    if (/Azure 金鑰才能翻/.test(m) && provider === 'mymemory') return 'MyMemory 不支援這個語言，沒辦法比。';
+    if (/MyMemory 一次只能/.test(m)) return '句子太長，MyMemory 沒辦法處理這一句。';
+    return m;
+  }
+  function sameText(x, y) {
+    function n(s) { return Core.normalizeText(s).toLowerCase().replace(/[\s.,!?;:。，！？；：、"'「」『』（）()]/g, ''); }
+    return n(x) === n(y);
+  }
   function node(tag, cls, text) {
     var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n;
   }
@@ -292,8 +310,11 @@
     return { root: box, setDst: function (t, e) { put(dst, t, e); }, setBack: function (t, e) { put(back, t, e); } };
   }
   function openCheck() {
-    if (!current) return;
+    if (!current || overlay) return;
+    if (Core.normalizeText(el.src.value) !== current.src) { toast('原文改過了，等譯文跑完再檢查'); return; }
     draftId = null;
+    cmpAbort = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var sig = cmpAbort ? cmpAbort.signal : undefined;
     var c = { from: current.from, to: current.to, src: current.src, dst: current.dst };
     var my = ++cmpSeq;
     var p = Core.pickProvider(settings), o = Core.otherProvider(settings, p);
@@ -306,27 +327,28 @@
     var results = {};
     function maybeNote() {
       if (results.a == null || results.b == null) return;
-      note.textContent = Core.normalizeText(results.a) === Core.normalizeText(results.b) ? '兩家翻出來的一樣，比較有把握。' : '兩家翻出來不一樣，重要的話請對照上面「翻回去」的意思，或找人確認。';
+      note.textContent = sameText(results.a, results.b) ? '兩家翻出來的一樣，比較有把握。' : '兩家翻出來不一樣，重要的話請對照上面「翻回去」的意思，或找人確認。';
     }
     results.a = c.dst;
-    translateVia(p, c.dst, c.to, c.from).then(function (t) { if (my === cmpSeq) rowA.setBack(t, false); },
-      function (e) { if (my === cmpSeq) rowA.setBack(errText(e), true); });
+    translateVia(p, c.dst, c.to, c.from, sig).then(function (t) { if (my === cmpSeq) rowA.setBack(t, false); },
+      function (e) { if (my === cmpSeq) rowA.setBack(errText(e, p), true); });
     if (o) {
       var rowB = cmpRow('另一家：' + Core.providerName(o), fromName, toName);
       el.cmpBody.appendChild(rowB.root);
-      translateVia(o, c.src, c.from, c.to).then(function (t2) {
+      translateVia(o, c.src, c.from, c.to, sig).then(function (t2) {
         if (my !== cmpSeq) return;
         rowB.setDst(t2, false); results.b = t2; maybeNote();
-        return translateVia(o, t2, c.to, c.from).then(function (t3) { if (my === cmpSeq) rowB.setBack(t3, false); });
+        return translateVia(o, t2, c.to, c.from, sig).then(function (t3) { if (my === cmpSeq) rowB.setBack(t3, false); });
       }).catch(function (e) {
         if (my !== cmpSeq) return;
-        if (results.b == null) { rowB.setDst(errText(e), true); rowB.setBack('—', false); } else rowB.setBack(errText(e), true);
+        if (results.b == null) { rowB.setDst(errText(e, o), true); rowB.setBack('—', false); } else rowB.setBack(errText(e, o), true);
       });
     } else {
       el.cmpBody.appendChild(node('p', 'p muted', '想看另一家的翻法，到「設定」填 Azure 金鑰（免費版就好）。'));
     }
     el.cmpBody.appendChild(note);
     openOverlay('cmp');
+    $('btnCmpClose').focus();
   }
 
   /* ---------- 常用句 ---------- */
