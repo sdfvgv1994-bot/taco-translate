@@ -4,6 +4,7 @@
   var Core = window.Core;
   var K_SET = 'taco-translate:v1:settings';
   var K_HIST = 'taco-translate:v1:history';
+  var K_PH = 'taco-translate:v1:phrases';
   var DEBOUNCE_MS = 800;
 
   function $(id) { return document.getElementById(id); }
@@ -16,6 +17,8 @@
 
   var settings = Core.cleanSettings(load(K_SET));
   var history = Core.cleanHistory(load(K_HIST));
+  var phrases = Core.cleanPhrases(load(K_PH));
+  var armedPhrase = null;
   var cache = new Map();
   var seq = 0, aborter = null, timer = null;
   var current = null;        // 畫面上這句譯文對應的紀錄 { id, from, to, src, dst }
@@ -30,6 +33,8 @@
     bigBox: $('big'), bigText: $('bigText'), toast: $('toast'),
     list: $('histList'), q: $('histQ'), chipAll: $('chipAll'), chipFav: $('chipFav'),
     azKey: $('azKey'), azRegion: $('azRegion'), setMsg: $('setMsg'), providerNow: $('providerNow'),
+    check: $('btnCheck'), cmpBox: $('cmpBox'), cmpBody: $('cmpBody'), selProvider: $('selProvider'),
+    phTo: $('phTo'), phIn: $('phIn'), phMsg: $('phMsg'), phList: $('phList'),
     histInfo: $('histInfo'), clearHist: $('btnClearHist'), forget: $('btnForget'), speechInfo: $('speechInfo')
   };
 
@@ -86,7 +91,7 @@
     current = entry;
     el.dst.textContent = entry ? entry.dst : '';
     var has = !!entry;
-    el.speak.disabled = el.copy.disabled = el.fav.disabled = el.big.disabled = !has;
+    el.speak.disabled = el.copy.disabled = el.fav.disabled = el.big.disabled = el.check.disabled = !has;
     var item = has ? Core.findItem(history, entry.id) : null;
     var fav = !!(item && item.fav);
     el.fav.setAttribute('aria-pressed', fav ? 'true' : 'false');
@@ -229,14 +234,166 @@
     saveHistory(); showResult(current);
     if (!Core.findItem(history, current.id)) toast('收藏不進去，紀錄已經滿了');
   }
+  /* 放大、檢查翻譯這兩個蓋在上面的畫面：Android 返回鍵只關掉它們，不會離開 app */
+  var overlay = null, overlayPushed = false;
+  function openOverlay(name) {
+    overlay = name;
+    (name === 'big' ? el.bigBox : el.cmpBox).hidden = false;
+    try { window.history.pushState({ ov: name }, ''); overlayPushed = true; } catch (e) { overlayPushed = false; }
+  }
+  function closeOverlay(fromPop) {
+    if (!overlay) return;
+    var name = overlay; overlay = null;
+    cmpSeq++;                                              // 還在跑的檢查請求不要再更新畫面、也不要再打下一個
+    if (cmpAbort) { try { cmpAbort.abort(); } catch (e) {} cmpAbort = null; }
+    el.bigBox.hidden = true; el.cmpBox.hidden = true;
+    if (!fromPop && overlayPushed) { try { window.history.back(); } catch (e) {} }
+    overlayPushed = false;
+    var back = name === 'big' ? el.big : el.check;
+    if (!back.disabled) back.focus();
+  }
   function openBig() {
-    if (!current) return;
+    if (!current || overlay) return;
     draftId = null;
     var n = Core.countChars(current.dst);
     el.bigText.className = 'big-text' + (n > 120 ? ' xlong' : n > 40 ? ' long' : '');
-    el.bigText.textContent = current.dst; el.bigBox.hidden = false; el.bigBox.focus();
+    el.bigText.textContent = current.dst; openOverlay('big'); el.bigBox.focus();
   }
-  function closeBig() { el.bigBox.hidden = true; el.big.focus(); }
+  function closeBig() { closeOverlay(false); }
+
+  /* ---------- 檢查翻譯：翻回原文、換另一家再翻 ---------- */
+  var cmpSeq = 0, cmpAbort = null, inflight = new Map();
+  function translateVia(provider, text, from, to, signal) {
+    var bad = Core.checkInput(provider, text, from, to);
+    if (bad) return Promise.reject(new Error(bad));
+    var key = Core.cacheKey(provider, from, to, text);
+    if (cache.has(key)) return Promise.resolve(cache.get(key));
+    if (navigator.onLine === false) return Promise.reject(new Error('現在沒有網路。'));
+    if (inflight.has(key)) return inflight.get(key);          // 同一句同時只打一次，連點不會多耗額度
+    var req;
+    try { req = Core.buildRequest(provider, text, from, to, settings); } catch (e) { return Promise.reject(e); }
+    if (signal) req.options.signal = signal;
+    var status = 0;
+    var pr = fetch(req.url, req.options).then(function (res) {
+      status = res.status; return res.json().catch(function () { return null; });
+    }).then(function (json) {
+      var out = Core.parseResponse(provider, status, json);
+      cache.set(key, out);
+      if (cache.size > 300) cache.delete(cache.keys().next().value);
+      inflight.delete(key);
+      return out;
+    }, function (e) { inflight.delete(key); throw e; });
+    inflight.set(key, pr);
+    return pr;
+  }
+  function errText(e, provider) {
+    var m = e && e.name === 'TypeError' ? '連不上翻譯服務。' : (e && e.message) || '失敗了。';
+    if (/Azure 金鑰才能翻/.test(m) && provider === 'mymemory') return 'MyMemory 不支援這個語言，沒辦法比。';
+    if (/MyMemory 一次只能/.test(m)) return '句子太長，MyMemory 沒辦法處理這一句。';
+    return m;
+  }
+  function sameText(x, y) {
+    function n(s) { return Core.normalizeText(s).toLowerCase().replace(/[\s.,!?;:。，！？；：、"'「」『』（）()]/g, ''); }
+    return n(x) === n(y);
+  }
+  function node(tag, cls, text) {
+    var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n;
+  }
+  function cmpRow(title, fromName, toName) {
+    var box = node('div', 'cmp');
+    box.appendChild(node('h3', '', title));
+    box.appendChild(node('div', 'lb', '翻成' + toName));
+    var dst = node('p', 'tx', '翻譯中…'); dst.dir = 'auto'; box.appendChild(dst);
+    box.appendChild(node('div', 'lb', '翻回' + fromName + '，檢查意思有沒有歪'));
+    var back = node('p', 'tx back', '…'); back.dir = 'auto'; box.appendChild(back);
+    function put(n, text, isErr) { n.textContent = text; n.className = 'tx' + (n === back ? ' back' : '') + (isErr ? ' err' : ''); }
+    return { root: box, setDst: function (t, e) { put(dst, t, e); }, setBack: function (t, e) { put(back, t, e); } };
+  }
+  function openCheck() {
+    if (!current || overlay) return;
+    if (Core.normalizeText(el.src.value) !== current.src) { toast('原文改過了，等譯文跑完再檢查'); return; }
+    draftId = null;
+    cmpAbort = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var sig = cmpAbort ? cmpAbort.signal : undefined;
+    var c = { from: current.from, to: current.to, src: current.src, dst: current.dst };
+    var my = ++cmpSeq;
+    var p = Core.pickProvider(settings), o = Core.otherProvider(settings, p);
+    var fromName = Core.langBy(c.from).name, toName = Core.langBy(c.to).name;
+    el.cmpBody.textContent = '';
+    var note = node('p', 'cmp-note', '');
+    var rowA = cmpRow('目前：' + Core.providerName(p), fromName, toName);
+    el.cmpBody.appendChild(rowA.root);
+    rowA.setDst(c.dst, false);
+    var results = {};
+    function maybeNote() {
+      if (results.a == null || results.b == null) return;
+      note.textContent = sameText(results.a, results.b) ? '兩家翻出來的一樣，比較有把握。' : '兩家翻出來不一樣，重要的話請對照上面「翻回去」的意思，或找人確認。';
+    }
+    results.a = c.dst;
+    translateVia(p, c.dst, c.to, c.from, sig).then(function (t) { if (my === cmpSeq) rowA.setBack(t, false); },
+      function (e) { if (my === cmpSeq) rowA.setBack(errText(e, p), true); });
+    if (o) {
+      var rowB = cmpRow('另一家：' + Core.providerName(o), fromName, toName);
+      el.cmpBody.appendChild(rowB.root);
+      translateVia(o, c.src, c.from, c.to, sig).then(function (t2) {
+        if (my !== cmpSeq) return;
+        rowB.setDst(t2, false); results.b = t2; maybeNote();
+        return translateVia(o, t2, c.to, c.from, sig).then(function (t3) { if (my === cmpSeq) rowB.setBack(t3, false); });
+      }).catch(function (e) {
+        if (my !== cmpSeq) return;
+        if (results.b == null) { rowB.setDst(errText(e, o), true); rowB.setBack('—', false); } else rowB.setBack(errText(e, o), true);
+      });
+    } else {
+      el.cmpBody.appendChild(node('p', 'p muted', '想看另一家的翻法，到「設定」填 Azure 金鑰（免費版就好）。'));
+    }
+    el.cmpBody.appendChild(note);
+    openOverlay('cmp');
+    $('btnCmpClose').focus();
+  }
+
+  /* ---------- 常用句 ---------- */
+  function savePhrases() { if (!save(K_PH, phrases)) toast('常用句存不進去'); }
+  function fillPhTo() {
+    el.phTo.textContent = '';
+    Core.LANGS.forEach(function (l) {
+      if (l.id === 'zh') return;
+      var o = document.createElement('option'); o.value = l.id; o.textContent = l.name; el.phTo.appendChild(o);
+    });
+  }
+  function renderPhrases() {
+    el.phTo.value = settings.to === 'zh' ? 'en' : settings.to;
+    el.phList.textContent = '';
+    if (!phrases.length) { el.phList.appendChild(node('p', 'empty', '沒有常用句了。上面可以新增。')); return; }
+    phrases.forEach(function (t) {
+      var row = node('div', 'item');
+      var main = node('button', 'item-main'); main.type = 'button'; main.dataset.act = 'use'; main.dataset.t = t;
+      var s = node('span', 'item-src', t); s.dir = 'auto'; main.appendChild(s);
+      var del = node('button', ''); del.type = 'button'; del.dataset.act = 'del'; del.dataset.t = t;
+      if (armedPhrase === t) { del.className = 'item-btn armed'; del.textContent = '確定刪除'; }
+      else { del.className = 'item-btn'; del.innerHTML = TRASH; del.setAttribute('aria-label', '刪除這句'); }
+      row.appendChild(main); row.appendChild(del); el.phList.appendChild(row);
+    });
+  }
+  function onPhraseClick(ev) {
+    var b = ev.target.closest('[data-act]'); if (!b) return;
+    var t = b.dataset.t;
+    if (b.dataset.act === 'use') {
+      armedPhrase = null; stopMic();
+      settings.from = 'zh'; if (settings.to === 'zh') settings.to = 'en';
+      saveSettings(); el.from.value = settings.from; el.to.value = settings.to;
+      el.src.value = t; updateCount(); draftId = null;
+      showView('viewTranslate'); translateNow();
+    } else if (b.dataset.act === 'del') {
+      if (armedPhrase !== t) { armedPhrase = t; renderPhrases(); return; }
+      armedPhrase = null; phrases = Core.removePhrase(phrases, t); savePhrases(); renderPhrases();
+    }
+  }
+  function addPhrase() {
+    var r = Core.addPhrase(phrases, el.phIn.value);
+    el.phMsg.textContent = r.error;
+    if (r.error) return;
+    phrases = r.list; savePhrases(); el.phIn.value = ''; renderPhrases();
+  }
 
   /* ---------- 紀錄 ---------- */
   var STAR = '<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l2.5 5.2 5.5.8-4 4 1 5.6-5-2.8-5 2.8 1-5.6-4-4 5.5-.8L12 4z"/></svg>';
@@ -302,7 +459,10 @@
   function renderSettings() {
     var p = Core.pickProvider(settings);
     el.tag.textContent = Core.providerName(p);
-    el.providerNow.textContent = '目前使用：' + Core.providerName(p) + (p === 'azure' ? '（已填金鑰）' : '（還沒填 Azure 金鑰）');
+    var wantAzure = settings.provider === 'azure' && !settings.azureKey;
+    el.providerNow.textContent = '目前使用：' + Core.providerName(p) +
+      (wantAzure ? '（你選了 Azure，但還沒填金鑰，先用 MyMemory）' : p === 'azure' ? '（已填金鑰）' : settings.provider === 'mymemory' ? '（固定）' : '（還沒填 Azure 金鑰）');
+    el.selProvider.value = settings.provider;
     el.forget.textContent = armedForget ? '再按一次確定移除' : '移除金鑰';
     el.forget.className = 'btn' + (armedForget ? ' armed' : '');
     var favs = history.filter(function (e) { return e.fav; }).length;
@@ -314,7 +474,7 @@
   }
   function fillForm() { el.azKey.value = settings.azureKey; el.azRegion.value = settings.azureRegion; }
   function formSettings() {
-    return Core.cleanSettings({ azureKey: el.azKey.value, azureRegion: el.azRegion.value, from: settings.from, to: settings.to });
+    return Core.cleanSettings({ azureKey: el.azKey.value, azureRegion: el.azRegion.value, provider: settings.provider, from: settings.from, to: settings.to });
   }
   function saveForm() {
     var next = formSettings(), bad = Core.keyProblem(next.azureKey);
@@ -352,12 +512,13 @@
 
   /* ---------- 切換畫面 ---------- */
   function showView(id) {
-    ['viewTranslate', 'viewHistory', 'viewSettings'].forEach(function (v) { $(v).hidden = v !== id; });
+    ['viewTranslate', 'viewPhrases', 'viewHistory', 'viewSettings'].forEach(function (v) { $(v).hidden = v !== id; });
     Array.prototype.forEach.call(document.querySelectorAll('.nav-btn'), function (b) {
       if (b.dataset.view === id) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     });
-    armedId = null; armedClear = false; armedForget = false;
+    armedId = null; armedClear = false; armedForget = false; armedPhrase = null;
     if (id !== 'viewTranslate') stopMic();
+    if (id === 'viewPhrases') { el.phMsg.textContent = ''; renderPhrases(); }
     if (id === 'viewHistory') renderHistory();
     if (id === 'viewSettings') {
       var dirty = el.azKey.value.trim() !== settings.azureKey || Core.cleanSettings({ azureRegion: el.azRegion.value }).azureRegion !== settings.azureRegion;
@@ -367,7 +528,7 @@
   }
 
   /* ---------- 開機 ---------- */
-  fillSelect(el.from, settings.from); fillSelect(el.to, settings.to);
+  fillSelect(el.from, settings.from); fillSelect(el.to, settings.to); fillPhTo();
   el.src.addEventListener('input', function () { updateCount(); schedule(); });
   el.from.addEventListener('change', function () { onPairChange('from'); });
   el.to.addEventListener('change', function () { onPairChange('to'); });
@@ -379,6 +540,23 @@
   el.fav.addEventListener('click', toggleCurrentFav);
   el.big.addEventListener('click', openBig);
   el.bigBox.addEventListener('click', closeBig);
+  el.check.addEventListener('click', openCheck);
+  $('btnCmpClose').addEventListener('click', function () { closeOverlay(false); });
+  window.addEventListener('popstate', function (ev) {
+    if (overlay && !(ev.state && ev.state.ov)) closeOverlay(true);
+  });
+  el.selProvider.addEventListener('change', function () {
+    settings.provider = el.selProvider.value; saveSettings(); renderSettings();
+    if (el.src.value) translateNow();
+  });
+  el.phList.addEventListener('click', onPhraseClick);
+  $('btnPhAdd').addEventListener('click', addPhrase);
+  el.phIn.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); addPhrase(); } });
+  el.phTo.addEventListener('change', function () {
+    settings.to = el.phTo.value;
+    if (settings.from === settings.to) { settings.from = 'zh'; el.from.value = 'zh'; }
+    saveSettings(); el.to.value = settings.to;
+  });
   el.list.addEventListener('click', onListClick);
   el.q.addEventListener('input', function () { armedId = null; renderHistory(); });
   el.chipAll.addEventListener('click', function () { favOnly = false; armedId = null; renderHistory(); });
