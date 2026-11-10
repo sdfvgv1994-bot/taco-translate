@@ -25,7 +25,7 @@
 
       <div class="src">
         <label class="lbl" for="srcText">原文</label>
-        <textarea id="srcText" maxlength="1000" rows="3" placeholder="在這裡打字，或按麥克風用講的" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+        <textarea id="srcText" dir="auto" maxlength="1000" rows="3" placeholder="在這裡打字，或按麥克風用講的" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
         <div class="row">
           <div class="row-l">
             <button id="btnClear" type="button" class="round line" aria-label="清除原文">
@@ -49,7 +49,7 @@
 
       <div class="dst">
         <div class="lbl">譯文</div>
-        <p id="dstText" class="dst-text" aria-live="polite"></p>
+        <p id="dstText" dir="auto" class="dst-text" aria-live="polite"></p>
         <p id="status" class="status" role="status"></p>
         <div class="acts">
           <button id="btnSpeak" type="button" class="act" disabled>
@@ -143,7 +143,7 @@
   </nav>
 
   <button id="big" type="button" class="big" hidden aria-label="關閉放大畫面">
-    <span id="bigText" class="big-text"></span>
+    <span id="bigText" dir="auto" class="big-text"></span>
     <span class="big-hint">點一下關閉</span>
   </button>
 

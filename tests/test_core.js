@@ -10,11 +10,30 @@ test('語言表：代號不重複，每個服務的代碼都有', () => {
   const ids = Core.LANGS.map((l) => l.id);
   assert.equal(new Set(ids).size, ids.length);
   for (const l of Core.LANGS) {
-    assert.ok(l.name && l.azure && l.mm && l.speech, l.id);
+    assert.ok(l.name && l.azure && l.speech, l.id);
+    assert.ok(l.mm || l.id === 'yue', l.id);   // 只有粵語沒有 MyMemory 代碼
   }
+  assert.equal(Core.LANGS.length, 20);
+  assert.equal(new Set(Core.LANGS.map((l) => l.azure)).size, 20);
   assert.equal(Core.langBy('zh').azure, 'zh-Hant');
   assert.equal(Core.langBy('zh').mm, 'zh-TW');
   assert.equal(Core.langBy('xx'), null);
+});
+
+test('粵語：MyMemory 擋下並提示填 Azure；Azure 可以送', () => {
+  assert.match(Core.checkInput('mymemory', '你好', 'zh', 'yue'), /Azure/);
+  assert.match(Core.checkInput('mymemory', '你好', 'yue', 'en'), /粵語/);
+  assert.equal(Core.checkInput('azure', '你好', 'zh', 'yue'), '');
+  const req = Core.buildRequest('azure', '你好', 'zh', 'yue', { azureKey: 'k' });
+  assert.match(req.url, /to=yue/);
+});
+
+test('簡體、新語言的請求代碼', () => {
+  assert.throws(() => Core.buildRequest('mymemory', 'x', 'zh', 'yue', {}), /Azure/);
+  const a = Core.buildRequest('azure', '你好', 'zh', 'zhs', { azureKey: 'k' });
+  assert.match(a.url, /from=zh-Hant&to=zh-Hans/);
+  const m = Core.buildRequest('mymemory', 'hi', 'en', 'fil', {});
+  assert.match(m.url, /langpair=en%7Ctl/);
 });
 
 test('normalizeText / countChars / byteLength', () => {
