@@ -454,3 +454,10 @@ test('detect：請求帶翻譯金鑰和地區，字太長只送前 500 字；回
   assert.equal(Core.parseDetectResponse(200, []), '');
   assert.equal(Core.parseDetectResponse(200, null), '');
 });
+
+test('sw.js：每次都先問網站有沒有新版（不然更新後 10 分鐘內會拿到舊程式，新按鈕按了沒反應）', () => {
+  const sw = require('node:fs').readFileSync(require('node:path').join(__dirname, '../web/sw.js'), 'utf8');
+  assert.match(sw, /cache:\s*'no-cache'/);
+  assert.match(sw, /FILES\.map\(fresh\)/);           // 安裝時存的檔案也要是最新的
+  assert.doesNotMatch(sw, /taco-translate-v1'/);      // 換新的快取名稱，舊的存檔會被清掉
+});
