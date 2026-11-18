@@ -48,6 +48,8 @@ h1 { margin: 0; font-size: 22px; font-weight: 900; letter-spacing: .06em; }
 #srcText::placeholder { color: var(--muted); font-weight: 500; font-size: 18px; }
 .row { display: flex; align-items: center; justify-content: space-between; flex: none; }
 .row-l { display: flex; align-items: center; gap: 8px; }
+.row-r { display: flex; align-items: center; gap: 12px; }
+#btnPhoto[aria-busy="true"] { opacity: .5; }
 .round { width: 44px; height: 44px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 50%; padding: 0; }
 .round.line { background: transparent; border: 1.5px solid var(--fg); }
 .mic {

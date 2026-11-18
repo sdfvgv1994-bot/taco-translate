@@ -49,9 +49,9 @@ test('normalizeText / countChars / byteLength', () => {
 });
 
 test('cleanSettings：壞資料變成預設值', () => {
-  assert.deepEqual(S(null), { azureKey: '', azureRegion: '', provider: 'auto', from: 'zh', to: 'en' });
+  assert.deepEqual(S(null), { azureKey: '', azureRegion: '', visionKey: '', visionEndpoint: '', provider: 'auto', from: 'zh', to: 'en' });
   assert.deepEqual(S({ azureKey: '  abc ', azureRegion: ' East Asia ', from: 'ja', to: 'xx' }),
-    { azureKey: 'abc', azureRegion: 'eastasia', provider: 'auto', from: 'ja', to: 'en' });
+    { azureKey: 'abc', azureRegion: 'eastasia', visionKey: '', visionEndpoint: '', provider: 'auto', from: 'ja', to: 'en' });
   assert.deepEqual(S({ azureKey: 123 }).azureKey, '');
 });
 
@@ -331,4 +331,126 @@ test('常用句：預設、新增、刪除、清理', () => {
   assert.match(Core.addPhrase(many, '新的').error, /最多/);
   assert.deepEqual(Core.removePhrase(['a', 'b'], 'a'), ['b']);
   for (const p of Core.DEFAULT_PHRASES) assert.equal(Core.addPhrase([], p).error, '');
+});
+
+/* ---------- 照片翻譯（Azure Vision） ---------- */
+
+test('Vision 端點：只收 Azure 的網址，結尾斜線、大小寫都整理好', () => {
+  assert.equal(Core.normalizeEndpoint('https://tac508.cognitiveservices.azure.com/'), 'https://tac508.cognitiveservices.azure.com');
+  assert.equal(Core.normalizeEndpoint('  https://TAC508.cognitiveservices.azure.com  '), 'https://tac508.cognitiveservices.azure.com');
+  assert.equal(Core.normalizeEndpoint('https://tac508.cognitiveservices.azure.com'), 'https://tac508.cognitiveservices.azure.com');
+  // 不是 Azure、不是 https、夾帶別的網域或路徑：一律不收，金鑰才不會被送到別的地方
+  assert.equal(Core.normalizeEndpoint('http://tac508.cognitiveservices.azure.com/'), '');
+  assert.equal(Core.normalizeEndpoint('https://evil.com/tac508.cognitiveservices.azure.com'), '');
+  assert.equal(Core.normalizeEndpoint('https://a.b.cognitiveservices.azure.com/'), '');
+  assert.equal(Core.normalizeEndpoint('https://tac508.cognitiveservices.azure.com.evil.com/'), '');
+  assert.equal(Core.normalizeEndpoint('https://tac508.cognitiveservices.azure.com/computervision'), '');
+  assert.equal(Core.normalizeEndpoint(123), '');
+  assert.equal(Core.endpointProblem(''), '');
+  assert.equal(Core.endpointProblem('https://tac508.cognitiveservices.azure.com/'), '');
+  assert.match(Core.endpointProblem('tac508'), /cognitiveservices/);
+  assert.equal(S({ visionEndpoint: 'https://x.example.com' }).visionEndpoint, '');
+  assert.equal(S({ visionKey: ' k ' }).visionKey, 'k');
+});
+
+test('visionReady：金鑰和端點都要有', () => {
+  assert.equal(Core.visionReady(S({})), false);
+  assert.equal(Core.visionReady(S({ visionKey: 'k' })), false);
+  assert.equal(Core.visionReady(S({ visionEndpoint: 'https://a.cognitiveservices.azure.com/' })), false);
+  assert.equal(Core.visionReady(S({ visionKey: 'k', visionEndpoint: 'https://a.cognitiveservices.azure.com/' })), true);
+  // 翻譯用的 Azure 金鑰跟照片用的是兩把，互不影響
+  assert.equal(Core.visionReady(S({ azureKey: 'k' })), false);
+});
+
+test('buildVisionRequest：送到 Read，帶金鑰，照片直接放 body', () => {
+  const s = S({ visionKey: 'vk', visionEndpoint: 'https://tac508.cognitiveservices.azure.com/' });
+  const img = { fake: 'blob' };
+  const r = Core.buildVisionRequest(img, s);
+  assert.equal(r.url, 'https://tac508.cognitiveservices.azure.com/computervision/imageanalysis:analyze?api-version=2024-02-01&features=read');
+  assert.equal(r.options.method, 'POST');
+  assert.equal(r.options.headers['Ocp-Apim-Subscription-Key'], 'vk');
+  assert.equal(r.options.headers['Content-Type'], 'application/octet-stream');
+  assert.equal(r.options.body, img);
+  assert.throws(() => Core.buildVisionRequest(img, S({})), /設定/);
+});
+
+test('parseVisionResponse：一行一行接起來，空白行丟掉', () => {
+  const ok = { readResult: { blocks: [
+    { lines: [{ text: ' 牛肉麵  $150 ' }, { text: '' }, { text: '滷肉飯 $40' }] },
+    { lines: [{ text: 'Open 11:00' }, { nope: 1 }, null] }
+  ] } };
+  assert.equal(Core.parseVisionResponse(200, ok), '牛肉麵 $150\n滷肉飯 $40\nOpen 11:00');
+});
+
+test('parseVisionResponse：沒讀到字、回傳怪怪的', () => {
+  assert.throws(() => Core.parseVisionResponse(200, { readResult: { blocks: [] } }), /沒有讀到文字/);
+  assert.throws(() => Core.parseVisionResponse(200, { readResult: { blocks: [{ lines: [{ text: '   ' }] }] } }), /沒有讀到文字/);
+  assert.throws(() => Core.parseVisionResponse(200, {}), /沒有回傳文字/);
+  assert.throws(() => Core.parseVisionResponse(200, null), /沒有回傳文字/);
+});
+
+test('parseVisionResponse：各種錯誤都變成看得懂的中文', () => {
+  assert.throws(() => Core.parseVisionResponse(401, { error: { code: '401', message: 'Access denied' } }), /金鑰不對/);
+  assert.throws(() => Core.parseVisionResponse(403, null), /免費額度/);
+  assert.throws(() => Core.parseVisionResponse(404, null), /端點/);
+  assert.throws(() => Core.parseVisionResponse(429, null), /等一下再試/);
+  assert.throws(() => Core.parseVisionResponse(400, { error: { code: 'InvalidRequest', message: 'Image format is not valid.', innererror: { code: 'InvalidImageFormat' } } }), /格式不支援/);
+  assert.throws(() => Core.parseVisionResponse(400, { error: { code: 'InvalidRequest', message: 'The image size is not allowed to be zero or larger than 20971520 bytes' } }), /太大/);
+  assert.throws(() => Core.parseVisionResponse(400, { error: { code: 'InvalidRequest', message: 'Analyze query is invalid.' } }), /InvalidRequest/);
+  assert.throws(() => Core.parseVisionResponse(503, null), /暫時有問題/);
+  assert.throws(() => Core.parseVisionResponse(418, null), /418/);
+});
+
+test('fitSize：太大就等比縮小，小的不放大', () => {
+  assert.deepEqual(Core.fitSize(4000, 3000, 2000), { w: 2000, h: 1500 });
+  assert.deepEqual(Core.fitSize(3000, 4000, 2000), { w: 1500, h: 2000 });
+  assert.deepEqual(Core.fitSize(800, 600, 2000), { w: 800, h: 600 });
+  assert.deepEqual(Core.fitSize(2000, 2000, 2000), { w: 2000, h: 2000 });
+  assert.deepEqual(Core.fitSize(9000, 10, 2000), { w: 2000, h: 2 });
+  assert.deepEqual(Core.fitSize(0, 10), { w: 0, h: 0 });
+  assert.deepEqual(Core.fitSize(4000, 3000), { w: Core.PHOTO_MAX_SIDE, h: Core.PHOTO_MAX_SIDE * 0.75 });
+});
+
+test('limitText：照片字太多只留前面，不會切壞 emoji', () => {
+  assert.deepEqual(Core.limitText('你好', 5), { text: '你好', cut: false });
+  assert.deepEqual(Core.limitText('一二三四五六', 3), { text: '一二三', cut: true });
+  assert.deepEqual(Core.limitText('😀😀😀', 2), { text: '😀😀', cut: true });
+  const long = Core.limitText('字'.repeat(1200));
+  assert.equal(long.cut, true);
+  assert.equal(Core.countChars(long.text), Core.MAX_LEN);
+  assert.equal(Core.checkInput('azure', long.text, 'zh', 'en'), '');   // 截完一定翻得了
+});
+
+test('照片語言：Azure 代碼對回 App 的語言', () => {
+  assert.equal(Core.langByAzure('vi').id, 'vi');
+  assert.equal(Core.langByAzure('zh-Hant').id, 'zh');
+  assert.equal(Core.langByAzure('zh-hans').id, 'zhs');
+  assert.equal(Core.langByAzure('pt-pt').id, 'pt');
+  assert.equal(Core.langByAzure('tl').id, 'fil');
+  assert.equal(Core.langByAzure('sw'), null);      // 不在 20 種裡面
+  assert.equal(Core.langByAzure(''), null);
+});
+
+test('photoPair：外文翻成中文；中文翻成另一邊；認不出來不動', () => {
+  assert.deepEqual(Core.photoPair('vi', 'zh', 'en'), { from: 'vi', to: 'zh', known: true });
+  assert.deepEqual(Core.photoPair('ja', 'zh', 'ja'), { from: 'ja', to: 'zh', known: true });
+  assert.deepEqual(Core.photoPair('en', 'ko', 'th'), { from: 'en', to: 'zh', known: true });
+  assert.deepEqual(Core.photoPair('zh-Hans', 'zh', 'en'), { from: 'zhs', to: 'zh', known: true });  // 簡體轉繁體
+  assert.deepEqual(Core.photoPair('zh-Hant', 'zh', 'ja'), { from: 'zh', to: 'ja', known: true });
+  assert.deepEqual(Core.photoPair('zh-Hant', 'th', 'zh'), { from: 'zh', to: 'th', known: true });
+  assert.deepEqual(Core.photoPair('zh-Hant', 'ko', 'th'), { from: 'zh', to: 'ko', known: true });
+  assert.deepEqual(Core.photoPair('sw', 'zh', 'en'), { from: 'zh', to: 'en', known: false });
+  assert.deepEqual(Core.photoPair('', 'ja', 'zh'), { from: 'ja', to: 'zh', known: false });
+});
+
+test('detect：請求帶翻譯金鑰和地區，字太長只送前 500 字；回應壞掉回空字串', () => {
+  const r = Core.buildDetectRequest('字'.repeat(800), S({ azureKey: 'tk', azureRegion: 'eastasia' }));
+  assert.equal(r.url, 'https://api.cognitive.microsofttranslator.com/detect?api-version=3.0');
+  assert.equal(r.options.headers['Ocp-Apim-Subscription-Key'], 'tk');
+  assert.equal(r.options.headers['Ocp-Apim-Subscription-Region'], 'eastasia');
+  assert.equal(Core.countChars(JSON.parse(r.options.body)[0].Text), 500);
+  assert.equal(Core.parseDetectResponse(200, [{ language: 'vi', score: 1 }]), 'vi');
+  assert.equal(Core.parseDetectResponse(401, { error: { code: 401000 } }), '');
+  assert.equal(Core.parseDetectResponse(200, []), '');
+  assert.equal(Core.parseDetectResponse(200, null), '');
 });

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.cognitive.microsofttranslator.com https://api.mymemory.translated.net; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.cognitive.microsofttranslator.com https://api.mymemory.translated.net https://*.cognitiveservices.azure.com; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="theme-color" content="#0F172A">
 <title>對譯</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -33,9 +33,15 @@
             </button>
             <span id="count" class="muted">0 字</span>
           </div>
-          <button id="btnMic" type="button" class="mic" aria-label="按一下開始說話" aria-pressed="false">
-            <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
-          </button>
+          <div class="row-r">
+            <button id="btnPhoto" type="button" class="round line" aria-label="拍照翻譯：拍一張或從相簿選照片">
+              <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4V8z"/><circle cx="12" cy="13" r="3.5"/></svg>
+            </button>
+            <input id="photoIn" type="file" accept="image/*" hidden>
+            <button id="btnMic" type="button" class="mic" aria-label="按一下開始說話" aria-pressed="false">
+              <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -141,6 +147,23 @@
             <button id="btnForget" type="button" class="btn">移除金鑰</button>
           </div>
           <p id="setMsg" class="p" role="status"></p>
+        </div>
+        <div class="card">
+          <h2>照片翻譯（Azure Vision）</h2>
+          <p id="visionNow" class="p"></p>
+          <p class="p muted">這是另一把金鑰，跟上面翻譯用的不一樣：到 Azure 的 Vision 資源 →「金鑰與端點」複製「金鑰 1」和「端點」。照片會送到 Azure 讀出裡面的字，證件、病歷、有個資的東西不要拍。一樣只存在這支手機。</p>
+          <label class="field">金鑰（金鑰 1）
+            <input id="visKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="200">
+          </label>
+          <label class="field">端點（例如 https://名稱.cognitiveservices.azure.com/）
+            <input id="visEndpoint" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="200">
+          </label>
+          <div class="btns">
+            <button id="btnVisSave" type="button" class="btn primary">儲存</button>
+            <button id="btnVisTest" type="button" class="btn">測試連線</button>
+            <button id="btnVisForget" type="button" class="btn">移除金鑰</button>
+          </div>
+          <p id="visMsg" class="p" role="status"></p>
         </div>
         <div class="card">
           <h2>紀錄</h2>

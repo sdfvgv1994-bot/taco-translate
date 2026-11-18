@@ -35,7 +35,9 @@
     azKey: $('azKey'), azRegion: $('azRegion'), setMsg: $('setMsg'), providerNow: $('providerNow'),
     check: $('btnCheck'), cmpBox: $('cmpBox'), cmpBody: $('cmpBody'), selProvider: $('selProvider'),
     phTo: $('phTo'), phIn: $('phIn'), phMsg: $('phMsg'), phList: $('phList'),
-    histInfo: $('histInfo'), clearHist: $('btnClearHist'), forget: $('btnForget'), speechInfo: $('speechInfo')
+    histInfo: $('histInfo'), clearHist: $('btnClearHist'), forget: $('btnForget'), speechInfo: $('speechInfo'),
+    photo: $('btnPhoto'), photoIn: $('photoIn'),
+    visKey: $('visKey'), visEndpoint: $('visEndpoint'), visMsg: $('visMsg'), visionNow: $('visionNow'), visForget: $('btnVisForget')
   };
 
   /* ---------- 小工具 ---------- */
@@ -351,6 +353,118 @@
     $('btnCmpClose').focus();
   }
 
+  /* ---------- 拍照翻譯：照片 → 縮小 → Azure Vision 讀字 → 填進原文 → 照平常的流程翻 ---------- */
+  var photoSeq = 0, photoAbort = null;
+  function viaImg(file) {
+    return new Promise(function (ok, bad) {
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () { URL.revokeObjectURL(url); ok(img); };
+      img.onerror = function () { URL.revokeObjectURL(url); bad(new Error('decode')); };
+      img.src = url;
+    });
+  }
+  function decodeImage(file) {
+    if (typeof createImageBitmap !== 'function') return viaImg(file);
+    return createImageBitmap(file, { imageOrientation: 'from-image' })      // 照手機拍的方向轉正，字才不會躺著
+      .catch(function () { return createImageBitmap(file); })
+      .catch(function () { return viaImg(file); });
+  }
+  /* 縮到最長邊 2000、存成 JPEG：手機原圖常常 3～8MB，縮完通常幾百 KB，上傳快、也不容易超過 Azure 的大小限制 */
+  function shrinkPhoto(file) {
+    return decodeImage(file).then(function (src) {
+      var size = Core.fitSize(src.width || src.naturalWidth, src.height || src.naturalHeight);
+      if (!size.w) throw new Error('decode');
+      var c = document.createElement('canvas'); c.width = size.w; c.height = size.h;
+      var ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, size.w, size.h);           // 透明的 PNG 墊白底，黑字才讀得到
+      ctx.drawImage(src, 0, 0, size.w, size.h);
+      if (src.close) { try { src.close(); } catch (e) {} }
+      return new Promise(function (ok, bad) {
+        c.toBlob(function (b) { if (b) ok(b); else bad(new Error('encode')); }, 'image/jpeg', 0.85);
+      });
+    }).catch(function () {
+      if (file.size && file.size <= 4 * 1024 * 1024) return file;            // 縮不了但檔案不大，原檔直接送
+      throw new Error('這張照片讀不進來，換一張或用相機重拍試試。');
+    });
+  }
+  function callVision(image, s, signal) {
+    var req = Core.buildVisionRequest(image, s), status = 0;
+    if (signal) req.options.signal = signal;
+    return fetch(req.url, req.options).then(function (res) {
+      status = res.status; return res.json().catch(function () { return null; });
+    }).then(function (json) { return Core.parseVisionResponse(status, json); });
+  }
+  /* 用 Azure 翻譯認語言；沒填翻譯金鑰、固定用 MyMemory、或任何失敗都回 ''，照原本的語言翻 */
+  function detectLang(text, signal) {
+    if (Core.pickProvider(settings) !== 'azure') return Promise.resolve('');
+    var req = Core.buildDetectRequest(text, settings), status = 0;
+    if (signal) req.options.signal = signal;
+    return fetch(req.url, req.options).then(function (res) {
+      status = res.status; return res.json().catch(function () { return null; });
+    }).then(function (json) { return Core.parseDetectResponse(status, json); }, function (e) {
+      if (e && e.name === 'AbortError') throw e;
+      return '';
+    });
+  }
+  function setPhotoBusy(on) {
+    if (on) el.photo.setAttribute('aria-busy', 'true'); else el.photo.removeAttribute('aria-busy');
+  }
+  function cancelPhoto() {
+    photoSeq++;
+    if (photoAbort) { try { photoAbort.abort(); } catch (e) {} photoAbort = null; }
+    setPhotoBusy(false);
+  }
+  function pickPhoto() {
+    if (!Core.visionReady(settings)) {
+      toast('先到「設定」填照片翻譯的金鑰和端點');
+      showView('viewSettings'); el.visKey.focus(); return;
+    }
+    stopMic();
+    el.photoIn.click();          // 手機會問要用相機拍，還是從相簿選
+  }
+  function onPhoto() {
+    var file = el.photoIn.files && el.photoIn.files[0];
+    el.photoIn.value = '';                                        // 清掉，同一張照片才能再選一次
+    if (!file) return;
+    if (navigator.onLine === false) { setStatus('現在沒有網路，拍照翻譯要連上網路才能用。', true); return; }
+    cancelPhoto();
+    var my = photoSeq;
+    photoAbort = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var sig = photoAbort ? photoAbort.signal : undefined;
+    clearTimeout(timer); seq++;                                   // 還在跑的打字翻譯不要再蓋過來
+    setPhotoBusy(true); showResult(null); setStatus('讀取照片裡的字…');
+    shrinkPhoto(file).then(function (img) {
+      if (my !== photoSeq) return null;
+      return callVision(img, settings, sig);
+    }).then(function (text) {
+      if (text == null || my !== photoSeq) return null;
+      var r = Core.limitText(text);
+      setStatus('認照片是什麼語言…');
+      return detectLang(r.text, sig).then(function (code) {
+        if (my !== photoSeq) return;
+        var oldFrom = settings.from, oldTo = settings.to;
+        var p = Core.photoPair(code, settings.from, settings.to);
+        settings.from = p.from; settings.to = p.to; saveSettings();
+        el.from.value = p.from; el.to.value = p.to;
+        el.src.value = r.text; updateCount(); draftId = null;
+        translateNow();
+        var notes = [];
+        if (p.known && (p.from !== oldFrom || p.to !== oldTo)) {
+          notes.push('照片是' + Core.langBy(p.from).name + '，自動改成 ' + Core.langBy(p.from).name + ' → ' + Core.langBy(p.to).name);
+        } else if (!p.known) {
+          notes.push(Core.pickProvider(settings) === 'azure' ? '認不出照片的語言，照目前選的語言翻；不對的話自己換原文語言' : '要自動認照片語言，到「設定」填 Azure 翻譯金鑰；現在照目前選的語言翻');
+        }
+        if (r.cut) notes.push('字太多，只翻前 ' + Core.MAX_LEN + ' 個字');
+        if (notes.length) toast(notes.join('；'));
+      });
+    }).catch(function (e) {
+      if (my !== photoSeq || (e && e.name === 'AbortError')) return;
+      setStatus(e && e.name === 'TypeError' ? '連不上照片辨識，檢查一下網路再試。' : (e && e.message) || '照片翻譯失敗，再試一次。', true);
+    }).then(function () {
+      if (my === photoSeq) { setPhotoBusy(false); photoAbort = null; }
+    });
+  }
+
   /* ---------- 常用句 ---------- */
   function savePhrases() { if (!save(K_PH, phrases)) toast('常用句存不進去'); }
   function fillPhTo() {
@@ -471,10 +585,17 @@
     el.clearHist.className = 'btn' + (armedClear ? ' armed' : '');
     el.speechInfo.textContent = '語音輸入：' + (SR ? '這個瀏覽器可以用' : '這個瀏覽器不支援，請改用 Chrome') +
       '。朗讀：' + ('speechSynthesis' in window ? '可以用' : '不支援') + '。';
+    el.visionNow.textContent = '拍照翻譯：' + (Core.visionReady(settings) ? '可以用了（已填金鑰和端點）' : '還沒設定，填好下面兩格就能用');
+    el.visForget.textContent = armedForgetV ? '再按一次確定移除' : '移除金鑰';
+    el.visForget.className = 'btn' + (armedForgetV ? ' armed' : '');
   }
-  function fillForm() { el.azKey.value = settings.azureKey; el.azRegion.value = settings.azureRegion; }
+  function fillForm() {
+    el.azKey.value = settings.azureKey; el.azRegion.value = settings.azureRegion;
+    el.visKey.value = settings.visionKey; el.visEndpoint.value = settings.visionEndpoint;
+  }
   function formSettings() {
-    return Core.cleanSettings({ azureKey: el.azKey.value, azureRegion: el.azRegion.value, provider: settings.provider, from: settings.from, to: settings.to });
+    return Core.cleanSettings({ azureKey: el.azKey.value, azureRegion: el.azRegion.value, provider: settings.provider, from: settings.from, to: settings.to,
+      visionKey: settings.visionKey, visionEndpoint: settings.visionEndpoint });      // 照片翻譯的金鑰另外存，這裡原樣帶著
   }
   function saveForm() {
     var next = formSettings(), bad = Core.keyProblem(next.azureKey);
@@ -503,6 +624,58 @@
     saveSettings(); fillForm(); renderSettings(); setMsg('金鑰已從這支手機移除，改用 MyMemory。');
     if (el.src.value) translateNow();
   }
+  /* 照片翻譯的金鑰：獨立一張卡片，存、測、移除都不會動到翻譯用的金鑰 */
+  var armedForgetV = false;
+  function visMsg(msg, isErr) { el.visMsg.textContent = msg || ''; el.visMsg.className = 'p' + (isErr ? ' err' : ''); }
+  function visForm() { return { key: el.visKey.value.trim(), endpoint: el.visEndpoint.value.trim() }; }
+  function visProblem(f) {
+    return Core.keyProblem(f.key) || Core.endpointProblem(f.endpoint) ||
+      (f.key && !f.endpoint ? '還要填「端點」。' : !f.key && f.endpoint ? '還要填「金鑰」。' : '');
+  }
+  function visDirty() {
+    var ep = el.visEndpoint.value;
+    return el.visKey.value.trim() !== settings.visionKey ||
+      Core.normalizeEndpoint(ep) !== settings.visionEndpoint || !!(ep.trim() && !Core.normalizeEndpoint(ep));
+  }
+  function saveVision() {
+    var f = visForm(), bad = visProblem(f);
+    if (bad) { visMsg(bad, true); return; }
+    settings = Core.cleanSettings(Object.assign({}, settings, { visionKey: f.key, visionEndpoint: f.endpoint }));
+    armedForgetV = false;
+    var ok = saveSettings(); fillForm(); renderSettings();
+    visMsg(ok ? (Core.visionReady(settings) ? '已儲存，可以用拍照翻譯了。' : '已儲存。') : '存不進去，手機瀏覽器可能關掉了儲存功能。', !ok);
+  }
+  /* 用程式畫一張寫著 Hello 123 的小圖送去讀：順便確認瀏覽器能直接連 Azure Vision（不會被擋） */
+  function sampleImage() {
+    var c = document.createElement('canvas'); c.width = 480; c.height = 160;
+    var x = c.getContext('2d');
+    x.fillStyle = '#fff'; x.fillRect(0, 0, 480, 160);
+    x.fillStyle = '#000'; x.font = 'bold 64px sans-serif'; x.textBaseline = 'middle'; x.fillText('Hello 123', 30, 80);
+    return new Promise(function (ok, bad) {
+      c.toBlob(function (b) { if (b) ok(b); else bad(new Error('測試圖片做不出來，再試一次。')); }, 'image/png');
+    });
+  }
+  function testVision() {
+    var f = visForm();
+    if (!f.key || !f.endpoint) { visMsg('先貼上金鑰和端點再測試。', true); return; }
+    var bad = visProblem(f);
+    if (bad) { visMsg(bad, true); return; }
+    if (navigator.onLine === false) { visMsg('現在沒有網路。', true); return; }
+    visMsg('測試中…');
+    var s = Core.cleanSettings({ visionKey: f.key, visionEndpoint: f.endpoint });
+    sampleImage().then(function (img) { return callVision(img, s); })
+      .then(function (text) { visMsg('連線成功，測試圖片讀到：「' + text.replace(/\n/g, ' ') + '」。記得按「儲存」。'); })
+      .catch(function (e) {
+        visMsg(e && e.name === 'TypeError' ? '連不上照片辨識。網路正常的話，可能是瀏覽器擋住了直接連線，把這段話告訴小修。' : (e && e.message) || '測試失敗。', true);
+      });
+  }
+  function forgetVision() {
+    if (!settings.visionKey && !settings.visionEndpoint && !el.visKey.value && !el.visEndpoint.value) { visMsg('目前沒有存照片翻譯的金鑰。'); return; }
+    if (!armedForgetV) { armedForgetV = true; renderSettings(); return; }
+    armedForgetV = false;
+    settings.visionKey = ''; settings.visionEndpoint = '';
+    saveSettings(); fillForm(); renderSettings(); visMsg('照片翻譯的金鑰已從這支手機移除。');
+  }
   function clearHist() {
     if (!armedClear) { armedClear = true; renderSettings(); return; }
     armedClear = false; history = Core.clearNonFav(history); draftId = null; saveHistory();
@@ -516,20 +689,27 @@
     Array.prototype.forEach.call(document.querySelectorAll('.nav-btn'), function (b) {
       if (b.dataset.view === id) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     });
-    armedId = null; armedClear = false; armedForget = false; armedPhrase = null;
+    armedId = null; armedClear = false; armedForget = false; armedPhrase = null; armedForgetV = false;
     if (id !== 'viewTranslate') stopMic();
     if (id === 'viewPhrases') { el.phMsg.textContent = ''; renderPhrases(); }
     if (id === 'viewHistory') renderHistory();
     if (id === 'viewSettings') {
       var dirty = el.azKey.value.trim() !== settings.azureKey || Core.cleanSettings({ azureRegion: el.azRegion.value }).azureRegion !== settings.azureRegion;
       setMsg(dirty ? '金鑰或地區改過但還沒存，記得按「儲存」。' : '', dirty);
+      var vd = visDirty();
+      visMsg(vd ? '照片翻譯的金鑰或端點改過但還沒存，記得按「儲存」。' : '', vd);
       renderSettings();
     }
   }
 
   /* ---------- 開機 ---------- */
   fillSelect(el.from, settings.from); fillSelect(el.to, settings.to); fillPhTo();
-  el.src.addEventListener('input', function () { updateCount(); schedule(); });
+  el.src.addEventListener('input', function () { cancelPhoto(); updateCount(); schedule(); });   // 自己動手打字了，還在讀的照片就不要再蓋掉原文
+  el.photo.addEventListener('click', pickPhoto);
+  el.photoIn.addEventListener('change', onPhoto);
+  $('btnVisSave').addEventListener('click', saveVision);
+  $('btnVisTest').addEventListener('click', testVision);
+  el.visForget.addEventListener('click', forgetVision);
   el.from.addEventListener('change', function () { onPairChange('from'); });
   el.to.addEventListener('change', function () { onPairChange('to'); });
   $('btnSwap').addEventListener('click', swap);
