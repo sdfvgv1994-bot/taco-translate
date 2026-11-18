@@ -69,6 +69,19 @@
     return /^[\x21-\x7e]+$/.test(key) ? '' : '金鑰裡有中文、全形字或空白，請重新從 Azure 複製一次。';
   }
 
+  /* Vision 端點只收 https://名稱.cognitiveservices.azure.com：金鑰只會送到 Azure，不會被填成別的網址帶走 */
+  function normalizeEndpoint(v) {
+    var s = typeof v === 'string' ? v.trim() : '';
+    var m = /^https:\/\/([a-z0-9][a-z0-9-]*)\.cognitiveservices\.azure\.com\/*$/i.exec(s);
+    return m ? 'https://' + m[1].toLowerCase() + '.cognitiveservices.azure.com' : '';
+  }
+
+  function endpointProblem(v) {
+    var s = typeof v === 'string' ? v.trim() : '';
+    if (!s) return '';
+    return normalizeEndpoint(s) ? '' : '端點要像 https://名稱.cognitiveservices.azure.com/ 這樣，請從 Azure 的「金鑰與端點」那頁複製。';
+  }
+
   function cleanSettings(s) {
     s = s && typeof s === 'object' ? s : {};
     var from = langBy(s.from) ? s.from : 'zh';
@@ -77,6 +90,8 @@
     return {
       azureKey: typeof s.azureKey === 'string' ? s.azureKey.trim() : '',
       azureRegion: typeof s.azureRegion === 'string' ? s.azureRegion.trim().toLowerCase().replace(/\s+/g, '') : '',
+      visionKey: typeof s.visionKey === 'string' ? s.visionKey.trim() : '',
+      visionEndpoint: normalizeEndpoint(s.visionEndpoint),
       provider: s.provider === 'mymemory' || s.provider === 'azure' ? s.provider : 'auto',
       from: from,
       to: to
@@ -231,6 +246,112 @@
     return provider + '\n' + from + '\n' + to + '\n' + text;
   }
 
+  /* ---------- 照片翻譯：Azure Vision 讀出照片裡的字（Image Analysis 4.0 的 Read） ---------- */
+  var PHOTO_MAX_SIDE = 2000;        // 送出前把照片縮到最長邊這麼大：省流量、省免費額度，字也還看得清楚
+
+  function visionReady(settings) {
+    return !!(settings && settings.visionKey && settings.visionEndpoint);
+  }
+
+  /* image 是照片的 Blob；回傳 { url, options }，用法跟 buildRequest 一樣 */
+  function buildVisionRequest(image, settings) {
+    if (!visionReady(settings)) throw new Error('照片辨識還沒設定，請到「設定」填 Vision 的金鑰和端點。');
+    return {
+      url: settings.visionEndpoint + '/computervision/imageanalysis:analyze?api-version=2024-02-01&features=read',
+      options: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', 'Ocp-Apim-Subscription-Key': settings.visionKey },
+        body: image
+      }
+    };
+  }
+
+  /* 把 Vision 回的東西變成一段文字（一行一行用換行接起來）；有問題就丟出中文錯誤訊息 */
+  function parseVisionResponse(status, json) {
+    if (status >= 200 && status < 300) {
+      var blocks = json && json.readResult && json.readResult.blocks;
+      if (!Array.isArray(blocks)) throw new Error('照片辨識沒有回傳文字，再試一次。');
+      var lines = [];
+      blocks.forEach(function (b) {
+        (b && Array.isArray(b.lines) ? b.lines : []).forEach(function (l) {
+          var t = l && typeof l.text === 'string' ? l.text.trim() : '';
+          if (t) lines.push(t);
+        });
+      });
+      var text = normalizeText(lines.join('\n'));
+      if (!text) throw new Error('照片裡沒有讀到文字。靠近一點、光線亮一點，把字拍清楚再試一次。');
+      return text;
+    }
+    var err = json && json.error;
+    var code = err && err.code ? String(err.code) : '';
+    var inner = err && err.innererror && err.innererror.code ? String(err.innererror.code) : '';
+    if (status === 401) throw new Error('照片辨識的金鑰不對，或端點沒填對。請到「設定」檢查。');
+    if (status === 403) throw new Error('照片辨識不允許這個操作，或這個月的免費額度用完了。請到「設定」檢查，或下個月再試。');
+    if (status === 404) throw new Error('找不到照片辨識的端點，請到「設定」檢查端點有沒有填對。');
+    if (status === 429) throw new Error('照片辨識太頻繁，或這個月的免費額度用完了。等一下再試。');
+    if (status === 400 && (inner === 'InvalidImageFormat' || /size|format/i.test(err && err.message || ''))) {
+      throw new Error('這張照片的格式不支援，或檔案太大，換一張試試。');
+    }
+    if (status >= 500) throw new Error('Azure 照片辨識那邊暫時有問題，等一下再試。');
+    throw new Error('照片辨識失敗（代碼 ' + (code || status) + '）。');
+  }
+
+  /* 照片尺寸：最長邊超過 max 就等比例縮小，不會放大 */
+  function fitSize(w, h, max) {
+    w = Number(w); h = Number(h); max = max || PHOTO_MAX_SIDE;
+    if (!(w > 0) || !(h > 0)) return { w: 0, h: 0 };
+    var long = Math.max(w, h);
+    if (long <= max) return { w: Math.round(w), h: Math.round(h) };
+    var k = max / long;
+    return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)) };
+  }
+
+  /* ---------- 照片是什麼語言：用 Azure 翻譯的 detect 認，認到就自動把語言對設好 ---------- */
+  function langByAzure(code) {
+    code = String(code || '').toLowerCase();
+    if (code === 'pt-pt' || code === 'pt-br') code = 'pt';
+    if (code === 'tl') code = 'fil';
+    for (var i = 0; i < LANGS.length; i++) if (LANGS[i].azure.toLowerCase() === code) return LANGS[i];
+    return null;
+  }
+
+  function buildDetectRequest(text, settings) {
+    var headers = { 'Content-Type': 'application/json', 'Ocp-Apim-Subscription-Key': settings.azureKey };
+    if (settings.azureRegion) headers['Ocp-Apim-Subscription-Region'] = settings.azureRegion;
+    return {
+      url: 'https://api.cognitive.microsofttranslator.com/detect?api-version=3.0',
+      options: { method: 'POST', headers: headers, body: JSON.stringify([{ Text: Array.from(String(text)).slice(0, 500).join('') }]) }
+    };
+  }
+
+  /* 認不出來就回 ''（畫面照原本選的語言翻，不會壞） */
+  function parseDetectResponse(status, json) {
+    if (status >= 200 && status < 300 && Array.isArray(json) && json[0] && typeof json[0].language === 'string') return json[0].language;
+    return '';
+  }
+
+  /*
+   * 照片要從什麼翻成什麼。拍照多半是「看不懂的字 → 中文」：
+   * - 照片是外文：外文 → 中文（繁體）
+   * - 照片是繁體中文：中文 → 目前用的另一邊語言（兩邊都是中文就英文）
+   * - 認不出來或不在 20 種裡面：照原本選的不動，known: false
+   */
+  function photoPair(detected, from, to) {
+    var l = langByAzure(detected);
+    if (!l) return { from: from, to: to, known: false };
+    if (l.id !== 'zh') return { from: l.id, to: 'zh', known: true };
+    var other = from !== 'zh' ? from : to !== 'zh' ? to : 'en';
+    return { from: 'zh', to: other, known: true };
+  }
+
+  /* 照片讀出來的字太長就只留前面 max 個字，並告訴畫面有被截斷 */
+  function limitText(text, max) {
+    max = max || MAX_LEN;
+    var chars = Array.from(String(text == null ? '' : text));
+    if (chars.length <= max) return { text: chars.join(''), cut: false };
+    return { text: chars.slice(0, max).join('').trim(), cut: true };
+  }
+
   /* ---------- 紀錄 ---------- */
 
   function cleanHistory(list) {
@@ -333,6 +454,10 @@
     cleanSettings: cleanSettings, pickProvider: pickProvider, providerName: providerName,
     checkInput: checkInput, buildRequest: buildRequest, parseResponse: parseResponse,
     decodeEntities: decodeEntities, cacheKey: cacheKey,
+    PHOTO_MAX_SIDE: PHOTO_MAX_SIDE, normalizeEndpoint: normalizeEndpoint, endpointProblem: endpointProblem,
+    visionReady: visionReady, buildVisionRequest: buildVisionRequest, parseVisionResponse: parseVisionResponse,
+    fitSize: fitSize, limitText: limitText,
+    langByAzure: langByAzure, buildDetectRequest: buildDetectRequest, parseDetectResponse: parseDetectResponse, photoPair: photoPair,
     cleanHistory: cleanHistory, addHistory: addHistory, toggleFav: toggleFav, removeItem: removeItem,
     clearNonFav: clearNonFav, findItem: findItem, filterHistory: filterHistory
   };
